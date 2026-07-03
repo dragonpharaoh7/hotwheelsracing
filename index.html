@@ -5,126 +5,154 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hot Wheels Racing Series</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700;800&family=Barlow+Semi+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
   :root{
-    --ink:#12100c; --paper:#f4f1ea; --card:#fbfaf6; --line:#d9d3c4;
-    --muted:#6f695c; --flag:#c9382c; --flag2:#1f6f4a; --gold:#c8901a;
-    --track:#26221b; --hi:#e9e3d4; --accent:#c9382c;
-    --radius:10px;
-    --mono:'DM Mono',ui-monospace,'SF Mono',Menlo,monospace;
-    --disp:'Archivo',system-ui,sans-serif;
-    --body:'Inter',system-ui,sans-serif;
+    /* Dark stock-car scoreboard palette (original, not a brand copy) */
+    --bg:#0d0f14;            /* carbon black page */
+    --bg2:#12151c;
+    --panel:#171b24;         /* raised panel */
+    --panel2:#1d222d;
+    --line:#2b323f;          /* hairline on dark */
+    --line2:#3a4353;
+    --ink:#eef1f6;           /* primary text (light on dark) */
+    --muted:#8b93a3;         /* secondary text */
+    --flag:#e2231a;          /* racing red */
+    --flag-dk:#b01109;
+    --flag2:#25c274;         /* go-green */
+    --gold:#f5c518;          /* checkered gold */
+    --steel:#c7ced9;         /* chrome/steel accent */
+    --hi:#222836;            /* hover row */
+    --accent:#e2231a;
+    --radius:6px;
+    --mono:'Share Tech Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --disp:'Saira Condensed','Barlow Semi Condensed',system-ui,sans-serif;
+    --semi:'Barlow Semi Condensed',system-ui,sans-serif;
+    --body:'Barlow',system-ui,sans-serif;
+    /* legacy aliases used around the app */
+    --paper:var(--bg); --card:var(--panel);
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{
-    background:var(--paper);color:var(--ink);font-family:var(--body);
+    background:var(--bg);color:var(--ink);font-family:var(--body);
     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;
+    background-image:
+      linear-gradient(180deg, #0b0d12 0%, #0d0f14 240px);
   }
-  a{color:var(--flag)}
+  a{color:var(--steel)}
   .wrap{max-width:1180px;margin:0 auto;padding:0 20px 80px}
+
+  .team-dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:none;border:1px solid rgba(255,255,255,.25)}
+  .carno-pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;margin:1px 1px 0 0;
+    border:1.5px solid var(--line2);border-radius:20px;background:rgba(255,255,255,.03)}
 
   /* Header / title */
   header.masthead{
-    border-bottom:3px solid var(--ink);margin-bottom:0;
-    padding:22px 0 16px;position:relative;overflow:hidden;
+    border-bottom:4px solid var(--flag);margin-bottom:0;
+    padding:24px 0 18px;position:relative;overflow:hidden;
+    background:linear-gradient(100deg,#14181f 0%,#0d0f14 60%);
   }
   .checker{
-    position:absolute;top:0;right:0;width:180px;height:100%;opacity:.10;
+    position:absolute;top:0;right:0;width:220px;height:100%;opacity:.14;
     background-image:
       linear-gradient(45deg,var(--ink) 25%,transparent 25%),
       linear-gradient(-45deg,var(--ink) 25%,transparent 25%),
       linear-gradient(45deg,transparent 75%,var(--ink) 75%),
       linear-gradient(-45deg,transparent 75%,var(--ink) 75%);
-    background-size:22px 22px;
-    background-position:0 0,0 11px,11px -11px,-11px 0;
+    background-size:20px 20px;
+    background-position:0 0,0 10px,10px -10px,-10px 0;
     pointer-events:none;
   }
   .kicker{
-    font-family:var(--mono);font-size:11px;letter-spacing:.32em;
-    text-transform:uppercase;color:var(--flag);margin:0 0 4px;font-weight:500;
+    font-family:var(--mono);font-size:11px;letter-spacing:.34em;
+    text-transform:uppercase;color:var(--flag);margin:0 0 6px;font-weight:400;
   }
   h1.title{
-    font-family:var(--disp);font-weight:800;font-size:clamp(30px,5.4vw,52px);
-    letter-spacing:-.02em;line-height:.94;margin:0;text-transform:uppercase;
+    font-family:var(--disp);font-weight:800;font-size:clamp(32px,6vw,58px);
+    letter-spacing:.005em;line-height:.9;margin:0;text-transform:uppercase;font-style:italic;
   }
-  h1.title .yr{color:var(--muted);font-weight:600}
-  .sub{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:8px;letter-spacing:.04em}
+  h1.title .yr{color:var(--flag);font-weight:700;-webkit-text-stroke:0;font-style:normal}
+  .sub{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:10px;letter-spacing:.04em}
 
   /* Nav tabs */
   nav.tabs{
-    display:flex;gap:2px;flex-wrap:wrap;border-bottom:3px solid var(--ink);
-    margin-bottom:26px;position:sticky;top:0;background:var(--paper);z-index:20;
+    display:flex;gap:2px;flex-wrap:wrap;border-bottom:2px solid var(--line2);
+    margin-bottom:26px;position:sticky;top:0;background:var(--bg);z-index:20;
     padding-top:2px;
   }
   nav.tabs button{
-    font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+    font-family:var(--disp);font-size:15px;letter-spacing:.04em;text-transform:uppercase;font-weight:600;font-style:italic;
     background:transparent;border:none;border-bottom:3px solid transparent;
-    margin-bottom:-3px;padding:12px 16px;cursor:pointer;color:var(--muted);font-weight:500;
+    margin-bottom:-2px;padding:12px 16px;cursor:pointer;color:var(--muted);
   }
-  nav.tabs button:hover{color:var(--ink);background:var(--hi)}
-  nav.tabs button.on{color:var(--ink);border-bottom-color:var(--flag)}
+  nav.tabs button:hover{color:var(--ink);background:var(--panel)}
+  nav.tabs button.on{color:#fff;border-bottom-color:var(--flag);background:var(--panel)}
 
   /* Generic */
-  h2.sec{font-family:var(--disp);font-weight:800;font-size:22px;text-transform:uppercase;letter-spacing:-.01em;margin:0 0 4px}
+  h2.sec{font-family:var(--disp);font-weight:800;font-size:26px;text-transform:uppercase;letter-spacing:.01em;margin:0 0 4px;font-style:italic}
   .lead{color:var(--muted);font-size:13.5px;margin:0 0 20px;max-width:64ch}
   .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
   .grow{flex:1 1 auto}
   .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
 
   button.btn{
-    font-family:var(--body);font-size:13px;font-weight:600;cursor:pointer;
-    background:var(--ink);color:var(--paper);border:2px solid var(--ink);
-    border-radius:var(--radius);padding:9px 16px;letter-spacing:.01em;
+    font-family:var(--disp);font-size:14px;font-weight:600;cursor:pointer;text-transform:uppercase;letter-spacing:.03em;font-style:italic;
+    background:var(--panel2);color:var(--ink);border:1.5px solid var(--line2);
+    border-radius:var(--radius);padding:9px 16px;
   }
-  button.btn:hover{background:#000}
+  button.btn:hover{background:#2a3140;border-color:var(--steel)}
   button.btn.ghost{background:transparent;color:var(--ink)}
-  button.btn.ghost:hover{background:var(--hi)}
-  button.btn.flag{background:var(--flag);border-color:var(--flag)}
-  button.btn.flag:hover{background:#a92b21}
-  button.btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
+  button.btn.ghost:hover{background:var(--panel2)}
+  button.btn.flag{background:var(--flag);border-color:var(--flag);color:#fff}
+  button.btn.flag:hover{background:var(--flag-dk);border-color:var(--flag-dk)}
+  button.btn.sm{padding:5px 10px;font-size:12px;border-radius:5px}
   button.btn:disabled{opacity:.4;cursor:not-allowed}
 
   input,select{
-    font-family:var(--body);font-size:14px;color:var(--ink);background:var(--card);
-    border:1.5px solid var(--line);border-radius:8px;padding:8px 10px;
+    font-family:var(--body);font-size:14px;color:var(--ink);background:var(--bg2);
+    border:1.5px solid var(--line);border-radius:5px;padding:8px 10px;
   }
-  input:focus,select:focus{outline:none;border-color:var(--flag);box-shadow:0 0 0 3px rgba(201,56,44,.14)}
+  input::placeholder{color:#5c6472}
+  input:focus,select:focus{outline:none;border-color:var(--flag);box-shadow:0 0 0 3px rgba(226,35,26,.22)}
   input.num{width:66px;text-align:center;font-family:var(--mono)}
+  select option{background:var(--panel);color:var(--ink)}
   label.fld{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--muted)}
   label.fld span{font-family:var(--mono);letter-spacing:.05em;text-transform:uppercase;font-size:10.5px}
 
-  .card{background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);padding:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px}
   .card + .card{margin-top:16px}
 
   /* Standings table */
   table.data{width:100%;border-collapse:collapse;font-size:14px}
   table.data th{
-    font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
-    text-align:right;color:var(--muted);padding:9px 10px;border-bottom:2px solid var(--ink);
-    white-space:nowrap;cursor:pointer;user-select:none;font-weight:500;
+    font-family:var(--semi);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    text-align:right;color:var(--muted);padding:9px 10px;border-bottom:2px solid var(--flag);
+    white-space:nowrap;cursor:pointer;user-select:none;font-weight:600;
   }
   table.data th:first-child,table.data th.l{text-align:left}
   table.data th.sortable:hover{color:var(--ink)}
-  table.data th .ar{opacity:.4;font-size:9px}
+  table.data th .ar{opacity:.5;font-size:9px;color:var(--flag)}
   table.data td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
   table.data td:first-child,table.data td.l{text-align:left}
   table.data tr:hover td{background:var(--hi)}
   .pos{font-family:var(--mono);color:var(--muted);width:34px}
-  .carno{font-family:var(--mono);font-weight:600;font-size:15px}
-  .pts{font-weight:800;font-family:var(--disp)}
+  .carno{font-family:var(--disp);font-weight:700;font-size:16px;font-style:italic}
+  .pts{font-weight:800;font-family:var(--disp);color:#fff}
   .cutline td{border-bottom:2px dashed var(--flag)}
-  .cutlabel{font-family:var(--mono);font-size:10px;color:var(--flag);letter-spacing:.1em;text-transform:uppercase}
-  .win-badge{display:inline-block;font-family:var(--mono);font-size:10px;background:var(--gold);color:#3a2a05;
-    padding:1px 6px;border-radius:20px;font-weight:600;margin-left:6px;vertical-align:1px}
+  .cutlabel{font-family:var(--disp);font-size:12px;color:var(--flag);letter-spacing:.1em;text-transform:uppercase;font-weight:700;font-style:italic}
+  .win-badge{display:inline-block;font-family:var(--mono);font-size:10px;background:var(--gold);color:#221a00;
+    padding:1px 6px;border-radius:3px;font-weight:600;margin-left:6px;vertical-align:1px}
 
-  .chip{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
-    padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--muted)}
-  .chip.long{background:#eef4f0;border-color:#bcd9c9;color:#1f6f4a}
-  .chip.short{background:#fbeceb;border-color:#e8bfbc;color:#a92b21}
-  .chip.intermediate{background:#fdf3e2;border-color:#ecd7ac;color:#8a6410}
-  .chip.road{background:#eef1fa;border-color:#c3cdec;color:#3b4c96}
-  .chip.playoff{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  .chip{display:inline-block;font-family:var(--semi);font-size:11px;letter-spacing:.05em;text-transform:uppercase;font-weight:600;
+    padding:2px 9px;border-radius:3px;border:1px solid var(--line2);color:var(--muted)}
+  .chip.long{background:rgba(37,194,116,.14);border-color:rgba(37,194,116,.4);color:#4ee39a}
+  .chip.short{background:rgba(226,35,26,.14);border-color:rgba(226,35,26,.4);color:#ff6b63}
+  .chip.intermediate{background:rgba(245,197,24,.14);border-color:rgba(245,197,24,.4);color:#f5d76e}
+  .chip.road{background:rgba(120,150,255,.14);border-color:rgba(120,150,255,.4);color:#9db0ff}
+  .chip.playoff{background:var(--gold);color:#221a00;border-color:var(--gold);font-weight:700}
 
   .empty{text-align:center;padding:44px 20px;color:var(--muted);font-size:14px}
   .empty i{font-size:30px;display:block;margin-bottom:8px;opacity:.5}
@@ -132,47 +160,48 @@
   /* Race entry grid */
   .grid-entry{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin-top:12px}
   .entry-row{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;
-    padding:5px 8px;border-radius:8px}
+    padding:6px 8px;border-radius:4px;transition:background .1s}
   .entry-row:hover{background:var(--hi)}
-  .entry-row .lab{font-family:var(--mono);font-weight:600;font-size:14px;min-width:44px}
+  .entry-row .lab{font-family:var(--disp);font-weight:700;font-size:16px;min-width:48px;font-style:italic}
 
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
-    background:var(--ink);color:var(--paper);padding:12px 20px;border-radius:var(--radius);
-    font-size:13px;font-weight:600;box-shadow:0 8px 26px rgba(0,0,0,.28);z-index:100;
+    background:var(--flag);color:#fff;padding:12px 22px;border-radius:var(--radius);
+    font-family:var(--disp);font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;font-style:italic;
+    box-shadow:0 8px 26px rgba(0,0,0,.5);z-index:100;
     opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
   .stat-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:22px}
-  .stat{background:var(--card);border:1.5px solid var(--line);border-radius:var(--radius);padding:12px 14px}
-  .stat .k{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-  .stat .v{font-family:var(--disp);font-weight:800;font-size:26px;line-height:1.1;margin-top:3px}
-  .stat .v small{font-size:13px;color:var(--muted);font-weight:600}
+  .stat{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--flag);border-radius:4px;padding:12px 14px}
+  .stat .k{font-family:var(--semi);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .stat .v{font-family:var(--disp);font-weight:800;font-size:28px;line-height:1.1;margin-top:3px;font-style:italic;color:#fff}
+  .stat .v small{font-size:13px;color:var(--muted);font-weight:600;font-style:normal}
 
-  details.rulebox{border:1.5px solid var(--line);border-radius:var(--radius);background:var(--card);margin-bottom:10px}
-  details.rulebox summary{cursor:pointer;padding:12px 16px;font-weight:600;font-family:var(--disp);
-    text-transform:uppercase;font-size:14px;letter-spacing:.01em;list-style:none}
+  details.rulebox{border:1px solid var(--line);border-radius:5px;background:var(--panel);margin-bottom:10px}
+  details.rulebox summary{cursor:pointer;padding:12px 16px;font-weight:700;font-family:var(--disp);color:var(--ink);
+    text-transform:uppercase;font-size:16px;letter-spacing:.02em;list-style:none;font-style:italic}
   details.rulebox summary::-webkit-details-marker{display:none}
   details.rulebox summary::before{content:'+';color:var(--flag);font-weight:800;margin-right:10px}
   details.rulebox[open] summary::before{content:'\2013'}
-  details.rulebox .body{padding:0 16px 16px;font-size:14px;color:#3a352c}
+  details.rulebox .body{padding:0 16px 16px;font-size:14px;color:#c3c9d4}
   details.rulebox .body p{margin:8px 0}
 
   .flex-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:16px;flex-wrap:wrap}
 
   .mini{font-family:var(--mono);font-size:11px;color:var(--muted)}
   .divider{height:1px;background:var(--line);margin:18px 0}
-  .pill-toggle{display:inline-flex;border:1.5px solid var(--line);border-radius:20px;overflow:hidden}
-  .pill-toggle button{border:none;background:transparent;font-family:var(--mono);font-size:11px;
-    text-transform:uppercase;letter-spacing:.06em;padding:6px 13px;cursor:pointer;color:var(--muted)}
-  .pill-toggle button.on{background:var(--ink);color:var(--paper)}
+  .pill-toggle{display:inline-flex;border:1.5px solid var(--line2);border-radius:4px;overflow:hidden}
+  .pill-toggle button{border:none;background:transparent;font-family:var(--semi);font-size:12px;font-weight:600;
+    text-transform:uppercase;letter-spacing:.05em;padding:6px 14px;cursor:pointer;color:var(--muted)}
+  .pill-toggle button.on{background:var(--flag);color:#fff}
 
   .h2h{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;max-width:420px}
-  .vs{font-family:var(--disp);font-weight:800;color:var(--flag)}
+  .vs{font-family:var(--disp);font-weight:800;color:var(--flag);font-style:italic;text-transform:uppercase}
   .fightlist{display:flex;flex-direction:column;gap:6px;margin-top:14px}
   .fightrow{display:grid;grid-template-columns:1fr auto 1fr auto;gap:10px;align-items:center;
-    padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:13px}
-  .fightrow .w{font-weight:700;font-family:var(--mono)}
-  .fightrow .l{color:var(--muted);font-family:var(--mono);text-align:right}
+    padding:8px 12px;border:1px solid var(--line);border-radius:5px;background:var(--bg2);font-size:13px}
+  .fightrow .w{font-weight:700;font-family:var(--disp);font-style:italic;color:#fff}
+  .fightrow .l{color:var(--muted);font-family:var(--disp);text-align:right;font-style:italic}
 
   @media(max-width:720px){
     .grid-entry{grid-template-columns:1fr}
@@ -190,6 +219,12 @@
     <h1 class="title">Hot Wheels<br>Racing Series <span class="yr" id="seasonLabel">2025–26</span></h1>
     <p class="sub" id="tagline">Loading season…</p>
     <p class="sub" id="syncState" style="margin-top:2px">● connecting…</p>
+  </div>
+  <div style="height:6px;display:flex">
+    <div style="flex:1;background:var(--flag)"></div>
+    <div style="flex:1;background:var(--gold)"></div>
+    <div style="flex:1;background:var(--steel)"></div>
+    <div style="flex:3;background:var(--panel)"></div>
   </div>
 </header>
 
@@ -221,6 +256,17 @@
 const POINTS = {1:18,2:14,3:13,4:12,5:11,6:9,7:8,8:7,9:6,10:5,11:3,12:2,13:1,14:1,15:1,16:1};
 const BONUS  = {1:9,2:8,3:7,4:6,5:5,6:4,7:3,8:2,9:1,10:1};
 function pointsForFinish(f){ return POINTS[f] != null ? POINTS[f] : 1; } // 17th+ = 1
+
+// Distinct, high-contrast team colors (readable as row highlights in both modes).
+const TEAM_PALETTE = ['#e11a2c','#f5a623','#f8e71c','#1a9e57','#00a3c4','#2d5bd7','#7b4dd8','#e0559e','#ff6b1f','#12b886','#845ef7','#c92a2a','#0ca678','#4263eb','#d6336c','#f76707'];
+function teamByName(name){ return (DB.teams||[]).find(t=>t.name===name) || null; }
+function teamColor(name){ const t=teamByName(name); return t? t.color : null; }
+function carTeamColor(num){ const c=DB.cars.find(x=>x.num===num); return c && c.team ? teamColor(c.team) : null; }
+// Low-opacity tint of a hex color for row backgrounds (works over light/dark via rgba).
+function hexTint(hex, a=0.12){
+  const h=hex.replace('#',''); const n=parseInt(h.length===3? h.split('').map(x=>x+x).join(''):h,16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
 
 const SEED_CARS = ['0.5','1','2','03','3','4','5','6','07','7','8','9','10','11','13','14','15','16','17','18','19','20','21','22','23','24','26','27','28','31','33','34','35','36','40','41','43','44','45','46','47','64','66','68','70','75','88','90','92','94','96','97','98','99','300','2001'];
 
@@ -513,6 +559,8 @@ function fmt(n,d=2){ return n==null? '—' : Number(n).toFixed(d).replace(/\.00$
 /* ---------- renderers ---------- */
 function render(){
   if(!DB.teams) DB.teams = [];  // migrate older databases
+  // Migrate teams from plain strings to {name,color} objects
+  DB.teams = DB.teams.map((t,i)=> typeof t==='string' ? {name:t, color:TEAM_PALETTE[i%TEAM_PALETTE.length]} : t);
   document.getElementById('seasonLabel').textContent = DB.season;
   const scored = DB.races.filter(r=>r.results).length;
   document.getElementById('tagline').textContent =
@@ -728,14 +776,25 @@ function renderEnter(){
 
   const entryRows = field.map(num=>{
     const e = existing[num]||{};
-    return `<div class="entry-row">
-      <span class="lab">#${esc(num)}</span>
+    const col = carTeamColor(num);
+    const tm = DB.cars.find(x=>x.num===num);
+    const teamName = tm && tm.team ? tm.team : '';
+    const style = col ? `border-left:4px solid ${col};background:${hexTint(col)}` : 'border-left:4px solid transparent';
+    return `<div class="entry-row" style="${style}" title="${esc(teamName)}">
+      <span class="lab" ${col?`style="color:${col}"`:''}>#${esc(num)}</span>
       <div class="row" style="gap:8px">
         <input class="num" data-num="${esc(num)}" data-k="start" placeholder="St" value="${e.start??''}" inputmode="numeric">
         <input class="num" data-num="${esc(num)}" data-k="finish" placeholder="Fin" value="${e.finish??''}" inputmode="numeric">
       </div>
     </div>`;
   }).join('');
+
+  // legend of which teams are in this race
+  const teamsInRace = [...new Set(field.map(n=>{ const c=DB.cars.find(x=>x.num===n); return c&&c.team?c.team:null; }).filter(Boolean))];
+  const legend = teamsInRace.length ? `<div class="row" style="gap:12px;margin-bottom:10px;flex-wrap:wrap">
+    ${teamsInRace.map(tn=>{ const col=teamColor(tn); const mem=field.filter(n=>{const c=DB.cars.find(x=>x.num===n);return c&&c.team===tn;});
+      return `<span class="mini" style="display:inline-flex;align-items:center;gap:6px"><span class="team-dot" style="background:${col}"></span>${esc(tn)} <span style="opacity:.6">(${mem.map(m=>'#'+m).join(', ')})</span></span>`; }).join('')}
+  </div>` : '';
 
   view.innerHTML = `
     <div class="flex-head">
@@ -767,6 +826,8 @@ function renderEnter(){
       </div>
 
       <div class="grid-entry" id="entryGrid">${entryRows}</div>
+
+      ${legend? `<div class="divider"></div>${legend}`:''}
 
       <div class="divider"></div>
       <div class="row" style="justify-content:flex-end;gap:10px">
@@ -879,7 +940,7 @@ function renderEnter(){
 /* ===== CARS ===== */
 function renderCars(){
   const teamOpts = (sel)=> `<option value="">— none —</option>` +
-    DB.teams.map(t=>`<option value="${esc(t)}" ${t===sel?'selected':''}>${esc(t)}</option>`).join('') +
+    DB.teams.map(t=>`<option value="${esc(t.name)}" ${t.name===sel?'selected':''}>${esc(t.name)}</option>`).join('') +
     `<option value="__new__">+ New team…</option>`;
   const rows = [...DB.cars].sort((a,b)=>parseFloat(a.num)-parseFloat(b.num)).map(c=>`
     <tr>
@@ -910,7 +971,7 @@ function renderCars(){
     const c=DB.cars.find(x=>x.num===el.dataset.num); if(!c) return;
     if(el.value==='__new__'){
       const name=(prompt('New team name:')||'').trim();
-      if(name){ if(!DB.teams.includes(name)) DB.teams.push(name); c.team=name; }
+      if(name){ if(!teamByName(name)) DB.teams.push({name, color:TEAM_PALETTE[DB.teams.length%TEAM_PALETTE.length]}); c.team=name; }
       saveDB(); render(); return;
     }
     c.team = el.value; saveDB();
@@ -936,34 +997,41 @@ function renderTeams(){
   const stand = {};
   computeStandings().forEach(r=> stand[r.num]=r);
   const teamRows = DB.teams.map(t=>{
-    const members = DB.cars.filter(c=>c.team===t).map(c=>c.num);
+    const members = DB.cars.filter(c=>c.team===t.name).map(c=>c.num);
     let pts=0, wins=0, finSum=0, raceSum=0, diff=0;
     members.forEach(num=>{ const s=stand[num]; if(s){ pts+=s.pts; wins+=s.wins; diff+=s.diff;
       if(s.avgFinish!=null){ finSum+=s.avgFinish*s.races; raceSum+=s.races; } }});
-    return {name:t, members, pts, wins, diff, avgFinish: raceSum? finSum/raceSum : null};
+    return {team:t, members, pts, wins, diff, avgFinish: raceSum? finSum/raceSum : null};
   }).sort((a,b)=> b.pts-a.pts || b.diff-a.diff);
 
   const unassigned = DB.cars.filter(c=>!c.team).map(c=>c.num);
 
-  const body = teamRows.length ? teamRows.map((t,i)=>`
-    <tr>
+  const body = teamRows.length ? teamRows.map((row,i)=>{
+    const t=row.team;
+    return `<tr>
       <td class="pos">${i+1}</td>
-      <td class="l"><strong>${esc(t.name)}</strong>
-        <div class="mini" style="margin-top:2px">${t.members.length? t.members.map(m=>'#'+esc(m)).join(' · ') : '<em>no cars</em>'}</div>
+      <td class="l">
+        <div class="row" style="gap:8px;align-items:center">
+          <span class="team-dot" style="background:${t.color}"></span>
+          <input data-team-name="${esc(t.name)}" value="${esc(t.name)}" style="font-weight:600;min-width:150px">
+          <input type="color" data-team-color="${esc(t.name)}" value="${t.color}" title="Team color" style="width:34px;height:30px;padding:2px;border-radius:6px;cursor:pointer">
+        </div>
+        <div class="mini" style="margin-top:4px">${row.members.length? row.members.map(m=>`<span class="carno-pill" style="border-color:${t.color};color:${t.color}">#${esc(m)}</span>`).join(' ') : '<em>no cars</em>'}</div>
       </td>
-      <td class="pts">${t.pts}</td>
-      <td>${t.wins}</td>
-      <td class="hide-sm">${fmt(t.avgFinish)}</td>
-      <td class="hide-sm">${t.diff>0?'+':''}${t.diff}</td>
-      <td>${t.members.length}</td>
+      <td class="pts">${row.pts}</td>
+      <td>${row.wins}</td>
+      <td class="hide-sm">${fmt(row.avgFinish)}</td>
+      <td class="hide-sm">${row.diff>0?'+':''}${row.diff}</td>
+      <td>${row.members.length}</td>
       <td class="l"><button class="btn ghost sm" data-delteam="${esc(t.name)}">✕</button></td>
-    </tr>`).join('')
+    </tr>`;
+  }).join('')
     : `<tr><td colspan="8" class="empty" style="padding:26px">No teams yet. Add one below, then assign cars on the Cars tab.</td></tr>`;
 
   view.innerHTML = `
     <div class="flex-head">
       <div><h2 class="sec">Teams</h2>
-        <p class="lead" style="margin:0">Combined points, wins, and form for every team. Assign cars to teams on the Cars tab.</p>
+        <p class="lead" style="margin:0">Combined points, wins, and form. Edit a name by typing in it; click the swatch to change the team's color. That color highlights teammates on the Enter Race screen.</p>
       </div>
       <div class="row">
         <input id="newTeam" placeholder="Team name" style="min-width:160px">
@@ -982,15 +1050,31 @@ function renderTeams(){
     ${unassigned.length? `<p class="mini" style="margin-top:12px">Unassigned cars: ${unassigned.map(n=>'#'+esc(n)).join(' · ')}</p>`:''}
   `;
 
+  // rename a team (updates every car pointing at the old name)
+  view.querySelectorAll('input[data-team-name]').forEach(inp=>{
+    inp.onchange=()=>{
+      const oldName=inp.dataset.teamName, newName=inp.value.trim();
+      if(!newName){ inp.value=oldName; return; }
+      if(newName===oldName) return;
+      if(teamByName(newName)){ toast('A team already has that name'); inp.value=oldName; return; }
+      const t=teamByName(oldName); if(t) t.name=newName;
+      DB.cars.forEach(c=>{ if(c.team===oldName) c.team=newName; });
+      saveDB(); render(); toast('Team renamed');
+    };
+  });
+  view.querySelectorAll('input[data-team-color]').forEach(inp=>{
+    inp.onchange=()=>{ const t=teamByName(inp.dataset.teamColor); if(t){ t.color=inp.value; saveDB(); render(); } };
+  });
   document.getElementById('addTeam').onclick=()=>{
     const v=document.getElementById('newTeam').value.trim(); if(!v) return;
-    if(DB.teams.includes(v)){ toast('Team already exists'); return; }
-    DB.teams.push(v); saveDB(); render(); toast('Team added');
+    if(teamByName(v)){ toast('Team already exists'); return; }
+    DB.teams.push({name:v, color:TEAM_PALETTE[DB.teams.length%TEAM_PALETTE.length]});
+    saveDB(); render(); toast('Team added');
   };
   view.querySelectorAll('[data-delteam]').forEach(b=> b.onclick=()=>{
     const name=b.dataset.delteam;
     if(!confirm(`Remove team "${name}"? Cars stay, but lose this team assignment.`)) return;
-    DB.teams=DB.teams.filter(t=>t!==name);
+    DB.teams=DB.teams.filter(t=>t.name!==name);
     DB.cars.forEach(c=>{ if(c.team===name) c.team=''; });
     saveDB(); render(); toast('Team removed');
   });
