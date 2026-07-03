@@ -199,6 +199,7 @@
     <button data-tab="schedule">Schedule</button>
     <button data-tab="enter">Enter Race</button>
     <button data-tab="cars">Cars</button>
+    <button data-tab="teams">Teams</button>
     <button data-tab="fights">Fights</button>
     <button data-tab="rules">Rulebook</button>
     <button data-tab="data">Data</button>
@@ -378,12 +379,30 @@ function seedDB(){
     season:'2025–26',
     regularCount:28,
     playoffCount:4,
+    teams:[],   // list of team names; cars reference by name in car.team
     cars, races,
     fights:[]  // {winner, loser, tie:false}
   };
 }
 
 /* ---------- computed standings ---------- */
+// Each race carries its original number (creation order, 1-based) so references stay stable.
+// Display order can be chronological, but the number never changes.
+function racesWithNumbers(){
+  return DB.races.map((r,idx)=>({r, num:idx+1}));
+}
+// Races in chronological display order, each keeping its original number.
+// Dated races sort earliest→latest; undated keep original order at the end.
+function sortedRaces(){
+  return racesWithNumbers()
+    .sort((a,b)=>{
+      const da=a.r.date||'', db=b.r.date||'';
+      if(da && db) return da<db? -1 : da>db? 1 : a.num-b.num;
+      if(da && !db) return -1;
+      if(!da && db) return 1;
+      return a.num-b.num;
+    });
+}
 function computeStandings(opts={}){
   const {playoffOnly=false, regularOnly=false} = opts;
   const map = {}; // num -> agg
@@ -411,8 +430,64 @@ function computeStandings(opts={}){
     avgFinish: a.races ? a.finSum/a.races : null,
     diff: (a.startCnt ? a.startSum : 0) - a.finSum // start - finish summed (positive = gained)
   }));
-  rows.sort((x,y)=> y.pts - x.pts || (x.avgFinish??99) - (y.avgFinish??99) || y.wins - x.wins);
+  rows.sort((x,y)=> y.pts - x.pts || y.diff - x.diff || y.wins - x.wins || (x.avgFinish??99) - (y.avgFinish??99));
   return rows;
+}
+
+/* ---------- playoff projection (Monte Carlo, runs in-browser) ----------
+   For each unscored race we randomly order its entered field, weighting each
+   car by its season form (lower avg finish = more likely to finish up front).
+   Repeat many times; tally how often each car ends the season in the top 16,
+   and record where the 16th-place points total lands (the projected cutoff). */
+function simulatePlayoffs(iters=3000){
+  const cutIdx = 15; // 16th place, zero-based
+  // current standings snapshot
+  const base = {}; // num -> current points
+  const form = {}; // num -> avg finish (for weighting); default 8.5 (mid of 16)
+  computeStandings().forEach(r=>{ base[r.num]=r.pts; form[r.num]= r.avgFinish!=null? r.avgFinish : 8.5; });
+  // ensure every active/entered car exists in base even with 0 races
+  const allNums = new Set();
+  DB.cars.filter(c=>c.active).forEach(c=>allNums.add(c.num));
+  const unscored = DB.races.filter(r=>!r.results);
+  unscored.forEach(r=> (r.entries||[]).forEach(n=>allNums.add(n)));
+  allNums.forEach(n=>{ if(base[n]==null) base[n]=0; if(form[n]==null) form[n]=8.5; });
+
+  const madeCount = {}; allNums.forEach(n=> madeCount[n]=0);
+  let cutlineSum = 0;
+
+  // weighted-shuffle: sample a finishing order where stronger cars tend to place higher
+  function simRace(entries){
+    // weight = inverse of form (better/lower avg finish → higher weight)
+    const pool = entries.map(n=>({n, w: 1/Math.max(0.5, form[n]||8.5)}));
+    const order = [];
+    const p = pool.slice();
+    while(p.length){
+      let tot=0; for(const x of p) tot+=x.w;
+      let pick=Math.random()*tot, k=0;
+      for(; k<p.length; k++){ pick-=p[k].w; if(pick<=0) break; }
+      if(k>=p.length) k=p.length-1;
+      order.push(p[k].n); p.splice(k,1);
+    }
+    return order; // order[0] = 1st place
+  }
+
+  for(let it=0; it<iters; it++){
+    const pts = Object.assign({}, base);
+    for(const r of unscored){
+      const field = (r.entries&&r.entries.length)? r.entries : [];
+      if(!field.length) continue;
+      const order = simRace(field);
+      order.forEach((n,i)=>{ pts[n] = (pts[n]||0) + pointsForFinish(i+1); });
+    }
+    const ranked = Object.entries(pts).sort((a,b)=> b[1]-a[1]);
+    for(let i=0;i<ranked.length && i<=cutIdx;i++){ if(i<=cutIdx) madeCount[ranked[i][0]] = (madeCount[ranked[i][0]]||0); }
+    ranked.slice(0, cutIdx+1).forEach(([n])=> madeCount[n]++);
+    cutlineSum += (ranked[cutIdx]? ranked[cutIdx][1] : 0);
+  }
+
+  const odds = {};
+  allNums.forEach(n=> odds[n] = madeCount[n]/iters);
+  return { odds, projectedCutoff: Math.round(cutlineSum/iters), racesLeft: unscored.length, iters };
 }
 
 /* ---------- UI plumbing ---------- */
@@ -437,12 +512,13 @@ function fmt(n,d=2){ return n==null? '—' : Number(n).toFixed(d).replace(/\.00$
 
 /* ---------- renderers ---------- */
 function render(){
+  if(!DB.teams) DB.teams = [];  // migrate older databases
   document.getElementById('seasonLabel').textContent = DB.season;
   const scored = DB.races.filter(r=>r.results).length;
   document.getElementById('tagline').textContent =
     `${DB.cars.filter(c=>c.active).length} cars · ${scored} of ${DB.races.length} races scored · top 16 make the playoffs`;
   ({standings:renderStandings, schedule:renderSchedule, enter:renderEnter,
-    cars:renderCars, fights:renderFights, rules:renderRules, data:renderData}[currentTab])();
+    cars:renderCars, teams:renderTeams, fights:renderFights, rules:renderRules, data:renderData}[currentTab])();
 }
 
 /* ===== STANDINGS ===== */
@@ -454,16 +530,28 @@ function renderStandings(){
   );
   // apply sort
   const k = sortState.key, dir = sortState.dir;
-  const sorted = [...rows].sort((a,b)=>{
+  // Canonical tiebreak chain: points → differential → wins → avg finish.
+  function tiebreak(a,b){ return b.pts-a.pts || b.diff-a.diff || b.wins-a.wins || (a.avgFinish??99)-(b.avgFinish??99); }
+  // Default view (sorted by points, descending) uses the full canonical chain.
+  // Clicking another column sorts by that column, then falls back to the chain.
+  const isDefault = (k==='pts' && dir===-1);
+  const sorted = isDefault ? [...rows].sort(tiebreak) : [...rows].sort((a,b)=>{
     let av=a[k], bv=b[k];
     if(av==null) av = dir<0? -Infinity: Infinity;
     if(bv==null) bv = dir<0? -Infinity: Infinity;
-    return (av<bv?-1:av>bv?1:0)*dir || y0(a,b);
+    return (av<bv?-1:av>bv?1:0)*dir || tiebreak(a,b);
   });
-  function y0(a,b){ return b.pts-a.pts; }
 
   const leader = sorted[0];
   const totalRaces = DB.races.filter(r=>r.results).length;
+
+  // Playoff projection — only meaningful in overall scope with races left and some data
+  let proj = null;
+  const anyScored = totalRaces>0;
+  const racesLeft = DB.races.filter(r=>!r.results).length;
+  if(standingsScope==='overall' && anyScored && racesLeft>0){
+    proj = simulatePlayoffs(3000);
+  }
 
   const scopeToggle = `
     <div class="pill-toggle" role="group" aria-label="Standings scope">
@@ -476,10 +564,21 @@ function renderStandings(){
       <div class="stat"><div class="k">Points Leader</div><div class="v">#${esc(leader.num)}</div></div>
       <div class="stat"><div class="k">Leader Points</div><div class="v">${leader.pts}</div></div>
       <div class="stat"><div class="k">Races Scored</div><div class="v">${totalRaces}<small> / ${DB.races.length}</small></div></div>
-      <div class="stat"><div class="k">Most Wins</div><div class="v">#${esc([...rows].sort((a,b)=>b.wins-a.wins)[0]?.num||'—')} <small>${[...rows].sort((a,b)=>b.wins-a.wins)[0]?.wins||0}W</small></div></div>
+      ${proj
+        ? `<div class="stat"><div class="k">Projected Cutoff</div><div class="v">${proj.projectedCutoff}<small> pts · ${proj.racesLeft} left</small></div></div>`
+        : `<div class="stat"><div class="k">Most Wins</div><div class="v">#${esc([...rows].sort((a,b)=>b.wins-a.wins)[0]?.num||'—')} <small>${[...rows].sort((a,b)=>b.wins-a.wins)[0]?.wins||0}W</small></div></div>`}
     </div>` : '';
 
   const th = (key,label,cls='')=>`<th class="sortable ${cls}" data-sort="${key}">${label}${sortState.key===key?` <span class="ar">${sortState.dir<0?'▼':'▲'}</span>`:''}</th>`;
+
+  function oddsCell(num){
+    if(!proj) return '';
+    const p = proj.odds[num];
+    if(p==null) return `<td class="hide-sm mini">—</td>`;
+    const pct = p>=0.995?'99%+' : p<=0.005 && p>0 ? '<1%' : Math.round(p*100)+'%';
+    const col = p>=0.85?'var(--flag2)' : p>=0.4?'var(--gold)' : p>0.1?'var(--muted)':'var(--flag)';
+    return `<td class="hide-sm" style="color:${col};font-weight:600">${pct}</td>`;
+  }
 
   let bodyRows = '';
   sorted.forEach((r,i)=>{
@@ -493,9 +592,10 @@ function renderStandings(){
       <td class="hide-sm">${fmt(r.avgStart)}</td>
       <td>${fmt(r.avgFinish)}</td>
       <td class="hide-sm">${r.diff>0?'+':''}${r.diff}</td>
+      ${oddsCell(r.num)}
     </tr>`;
     if(i===15 && sorted.length>16){
-      bodyRows += `<tr><td colspan="8" style="text-align:center;padding:4px 0"><span class="cutlabel">— playoff cut line · top 16 —</span></td></tr>`;
+      bodyRows += `<tr><td colspan="${proj?9:8}" style="text-align:center;padding:4px 0"><span class="cutlabel">— playoff cut line · top 16 —</span></td></tr>`;
     }
   });
 
@@ -503,7 +603,7 @@ function renderStandings(){
     <div class="flex-head">
       <div>
         <h2 class="sec">Standings</h2>
-        <p class="lead" style="margin:0">Auto-calculated from every scored race. Click any column to sort.</p>
+        <p class="lead" style="margin:0">Auto-calculated from every scored race. Ties broken by differential. Click any column to sort.</p>
       </div>
       ${scopeToggle}
     </div>
@@ -520,10 +620,13 @@ function renderStandings(){
           ${th('avgStart','Avg St','hide-sm')}
           ${th('avgFinish','Avg Fin')}
           ${th('diff','Diff','hide-sm')}
+          ${proj?`<th class="hide-sm l" title="Simulated chance of finishing top 16">Playoff %</th>`:''}
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
-    </div>` : `<div class="empty"><i>🏁</i>No races scored yet. Head to <strong>Enter Race</strong> to log your first result.</div>`}
+    </div>
+    ${proj?`<p class="mini" style="margin-top:10px">Playoff % and projected cutoff come from ${proj.iters.toLocaleString()} simulations of the ${proj.racesLeft} remaining race${proj.racesLeft===1?'':'s'}, weighting each car by its current form. Estimates shift as more races are scored.</p>`:''}
+    ` : `<div class="empty"><i>🏁</i>No races scored yet. Head to <strong>Enter Race</strong> to log your first result.</div>`}
   `;
 
   view.querySelectorAll('th.sortable').forEach(th=>{
@@ -541,11 +644,11 @@ function renderStandings(){
 
 /* ===== SCHEDULE ===== */
 function renderSchedule(){
-  const rows = DB.races.map((r,i)=>{
+  const rows = sortedRaces().map(({r, num})=>{
     const scored = !!r.results;
     const winner = scored ? r.results.find(x=>x.finish===1)?.num : null;
     return `<tr>
-      <td class="pos">${i+1}</td>
+      <td class="pos">${num}</td>
       <td class="l">
         <input data-f="name" data-id="${r.id}" value="${esc(r.name)}" style="width:100%;max-width:280px">
       </td>
@@ -613,7 +716,7 @@ function renderEnter(){
   if(!race){ view.innerHTML = `<div class="empty">Add a race in the Schedule tab first.</div>`; return; }
 
   const picker = `<select id="racePick" style="min-width:220px">
-    ${DB.races.map((r,i)=>`<option value="${r.id}" ${r.id===race.id?'selected':''}>${i+1}. ${esc(r.name)}${r.results?' ✓':''}</option>`).join('')}
+    ${sortedRaces().map(({r, num})=>`<option value="${r.id}" ${r.id===race.id?'selected':''}>${num}. ${esc(r.name)}${r.results?' ✓':''}</option>`).join('')}
   </select>`;
 
   if(!race.entries) race.entries = [];
@@ -775,10 +878,13 @@ function renderEnter(){
 
 /* ===== CARS ===== */
 function renderCars(){
+  const teamOpts = (sel)=> `<option value="">— none —</option>` +
+    DB.teams.map(t=>`<option value="${esc(t)}" ${t===sel?'selected':''}>${esc(t)}</option>`).join('') +
+    `<option value="__new__">+ New team…</option>`;
   const rows = [...DB.cars].sort((a,b)=>parseFloat(a.num)-parseFloat(b.num)).map(c=>`
     <tr>
       <td class="l"><span class="carno">#${esc(c.num)}</span></td>
-      <td class="l"><input data-num="${esc(c.num)}" data-f="team" value="${esc(c.team||'')}" placeholder="— add team —" style="width:100%;max-width:240px"></td>
+      <td class="l"><select data-num="${esc(c.num)}" data-f="team" style="width:100%;max-width:240px">${teamOpts(c.team||'')}</select></td>
       <td class="l"><label class="mini" style="cursor:pointer"><input type="checkbox" data-num="${esc(c.num)}" data-f="active" ${c.active?'checked':''}> active</label></td>
       <td class="l"><button class="btn ghost sm" data-delcar="${esc(c.num)}">✕</button></td>
     </tr>`).join('');
@@ -786,7 +892,7 @@ function renderCars(){
   view.innerHTML = `
     <div class="flex-head">
       <div><h2 class="sec">Cars</h2>
-        <p class="lead" style="margin:0">The roster the league runs on. Team column is ready for whenever you assign them — leave blank for now.</p>
+        <p class="lead" style="margin:0">The roster the league runs on. Assign each car a team from the dropdown, or create one with "+ New team". Manage teams on the Teams tab.</p>
       </div>
       <div class="row">
         <input id="newCar" placeholder="Car #" class="num" style="width:90px">
@@ -795,15 +901,23 @@ function renderCars(){
     </div>
     <div class="card" style="padding:6px 4px">
       <table class="data">
-        <thead><tr><th class="l">Car</th><th class="l">Team (optional)</th><th class="l">Status</th><th class="l"></th></tr></thead>
+        <thead><tr><th class="l">Car</th><th class="l">Team</th><th class="l">Status</th><th class="l"></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
 
-  view.querySelectorAll('input[data-f]').forEach(el=> el.onchange=()=>{
+  view.querySelectorAll('select[data-f="team"]').forEach(el=> el.onchange=()=>{
     const c=DB.cars.find(x=>x.num===el.dataset.num); if(!c) return;
-    c[el.dataset.f] = el.dataset.f==='active'? el.checked : el.value;
-    saveDB(); if(el.dataset.f==='active') render();
+    if(el.value==='__new__'){
+      const name=(prompt('New team name:')||'').trim();
+      if(name){ if(!DB.teams.includes(name)) DB.teams.push(name); c.team=name; }
+      saveDB(); render(); return;
+    }
+    c.team = el.value; saveDB();
+  });
+  view.querySelectorAll('input[data-f="active"]').forEach(el=> el.onchange=()=>{
+    const c=DB.cars.find(x=>x.num===el.dataset.num); if(!c) return;
+    c.active = el.checked; saveDB(); render();
   });
   view.querySelectorAll('[data-delcar]').forEach(b=> b.onclick=()=>{
     if(!confirm('Remove car #'+b.dataset.delcar+'? (Past results keep their record.)')) return;
@@ -814,6 +928,72 @@ function renderCars(){
     if(DB.cars.some(c=>c.num===v)){ toast('Car already exists'); return; }
     DB.cars.push({num:v,team:'',active:true}); saveDB(); render(); toast('Car #'+v+' added');
   };
+}
+
+/* ===== TEAMS ===== */
+function renderTeams(){
+  // combined stats per team from standings
+  const stand = {};
+  computeStandings().forEach(r=> stand[r.num]=r);
+  const teamRows = DB.teams.map(t=>{
+    const members = DB.cars.filter(c=>c.team===t).map(c=>c.num);
+    let pts=0, wins=0, finSum=0, raceSum=0, diff=0;
+    members.forEach(num=>{ const s=stand[num]; if(s){ pts+=s.pts; wins+=s.wins; diff+=s.diff;
+      if(s.avgFinish!=null){ finSum+=s.avgFinish*s.races; raceSum+=s.races; } }});
+    return {name:t, members, pts, wins, diff, avgFinish: raceSum? finSum/raceSum : null};
+  }).sort((a,b)=> b.pts-a.pts || b.diff-a.diff);
+
+  const unassigned = DB.cars.filter(c=>!c.team).map(c=>c.num);
+
+  const body = teamRows.length ? teamRows.map((t,i)=>`
+    <tr>
+      <td class="pos">${i+1}</td>
+      <td class="l"><strong>${esc(t.name)}</strong>
+        <div class="mini" style="margin-top:2px">${t.members.length? t.members.map(m=>'#'+esc(m)).join(' · ') : '<em>no cars</em>'}</div>
+      </td>
+      <td class="pts">${t.pts}</td>
+      <td>${t.wins}</td>
+      <td class="hide-sm">${fmt(t.avgFinish)}</td>
+      <td class="hide-sm">${t.diff>0?'+':''}${t.diff}</td>
+      <td>${t.members.length}</td>
+      <td class="l"><button class="btn ghost sm" data-delteam="${esc(t.name)}">✕</button></td>
+    </tr>`).join('')
+    : `<tr><td colspan="8" class="empty" style="padding:26px">No teams yet. Add one below, then assign cars on the Cars tab.</td></tr>`;
+
+  view.innerHTML = `
+    <div class="flex-head">
+      <div><h2 class="sec">Teams</h2>
+        <p class="lead" style="margin:0">Combined points, wins, and form for every team. Assign cars to teams on the Cars tab.</p>
+      </div>
+      <div class="row">
+        <input id="newTeam" placeholder="Team name" style="min-width:160px">
+        <button class="btn flag" id="addTeam">+ Add team</button>
+      </div>
+    </div>
+    <div class="card" style="padding:6px 4px">
+      <table class="data">
+        <thead><tr>
+          <th class="l" style="width:34px">#</th><th class="l">Team · Cars</th>
+          <th>Pts</th><th>Wins</th><th class="hide-sm">Avg Fin</th><th class="hide-sm">Diff</th><th>Cars</th><th class="l"></th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+    ${unassigned.length? `<p class="mini" style="margin-top:12px">Unassigned cars: ${unassigned.map(n=>'#'+esc(n)).join(' · ')}</p>`:''}
+  `;
+
+  document.getElementById('addTeam').onclick=()=>{
+    const v=document.getElementById('newTeam').value.trim(); if(!v) return;
+    if(DB.teams.includes(v)){ toast('Team already exists'); return; }
+    DB.teams.push(v); saveDB(); render(); toast('Team added');
+  };
+  view.querySelectorAll('[data-delteam]').forEach(b=> b.onclick=()=>{
+    const name=b.dataset.delteam;
+    if(!confirm(`Remove team "${name}"? Cars stay, but lose this team assignment.`)) return;
+    DB.teams=DB.teams.filter(t=>t!==name);
+    DB.cars.forEach(c=>{ if(c.team===name) c.team=''; });
+    saveDB(); render(); toast('Team removed');
+  });
 }
 
 /* ===== FIGHTS ===== */
