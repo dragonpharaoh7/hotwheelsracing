@@ -46,6 +46,10 @@
   .wrap{max-width:1180px;margin:0 auto;padding:0 20px 80px}
 
   .team-dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:none;border:1px solid rgba(255,255,255,.25)}
+  .team-logo{border-radius:4px;object-fit:cover;vertical-align:middle;flex:none;background:#fff;border:1px solid var(--line2)}
+  .logo-ph{width:28px;height:28px;border-radius:4px;border:1.5px dashed;display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:12px;flex:none;opacity:.6}
+  .carno-cell{display:inline-flex;align-items:center;gap:8px}
+  .driver-name{font-family:var(--semi);font-weight:500;color:var(--muted);font-size:12.5px}
   .carno-pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;margin:1px 1px 0 0;
     border:1.5px solid var(--line2);border-radius:20px;background:rgba(255,255,255,.03)}
 
@@ -162,7 +166,7 @@
   .entry-row{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;
     padding:6px 8px;border-radius:4px;transition:background .1s}
   .entry-row:hover{background:var(--hi)}
-  .entry-row .lab{font-family:var(--disp);font-weight:700;font-size:16px;min-width:48px;font-style:italic}
+  .entry-row .lab{font-family:var(--disp);font-weight:700;font-size:16px;min-width:48px;font-style:italic;display:flex;align-items:center;gap:6px}
 
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
     background:var(--flag);color:#fff;padding:12px 22px;border-radius:var(--radius);
@@ -234,6 +238,7 @@
     <button data-tab="schedule">Schedule</button>
     <button data-tab="enter">Enter Race</button>
     <button data-tab="cars">Cars</button>
+    <button data-tab="drivers">Drivers</button>
     <button data-tab="teams">Teams</button>
     <button data-tab="fights">Fights</button>
     <button data-tab="rules">Rulebook</button>
@@ -266,6 +271,31 @@ function carTeamColor(num){ const c=DB.cars.find(x=>x.num===num); return c && c.
 function hexTint(hex, a=0.12){
   const h=hex.replace('#',''); const n=parseInt(h.length===3? h.split('').map(x=>x+x).join(''):h,16);
   return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+// Driver name for a car, or '' if none.
+function carDriver(num){ const c=DB.cars.find(x=>x.num===num); return c && c.driver ? c.driver : ''; }
+// Team logo (base64 data URI) for a car's team, or null.
+function carTeamLogo(num){ const c=DB.cars.find(x=>x.num===num); if(!c||!c.team) return null; const t=teamByName(c.team); return t && t.logo ? t.logo : null; }
+// Small logo <img> markup for inline use, or '' if none.
+function logoImg(num, size=20){ const src=carTeamLogo(num); return src? `<img class="team-logo" src="${src}" style="width:${size}px;height:${size}px" alt="">` : ''; }
+// Downscale an uploaded image file to a square dataURL (~maxpx), returned via callback.
+function downscaleImage(file, maxpx, cb){
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const img=new Image();
+    img.onload=()=>{
+      const side=Math.min(img.width, img.height);          // center-crop to square
+      const sx=(img.width-side)/2, sy=(img.height-side)/2;
+      const cv=document.createElement('canvas'); cv.width=maxpx; cv.height=maxpx;
+      const ctx=cv.getContext('2d');
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, maxpx, maxpx);
+      cb(cv.toDataURL('image/png'));
+    };
+    img.onerror=()=>cb(null);
+    img.src=reader.result;
+  };
+  reader.onerror=()=>cb(null);
+  reader.readAsDataURL(file);
 }
 
 const SEED_CARS = ['0.5','1','2','03','3','4','5','6','07','7','8','9','10','11','13','14','15','16','17','18','19','20','21','22','23','24','26','27','28','31','33','34','35','36','40','41','43','44','45','46','47','64','66','68','70','75','88','90','92','94','96','97','98','99','300','2001'];
@@ -327,8 +357,8 @@ const SEED_RESULTS = [
    Until you fill these in, the app runs in "local only" mode
    (saves in your browser, no sharing).
    ============================================================ */
-const SUPABASE_URL = "https://icbbcnksulieahxyywwh.supabase.co";      // e.g. https://abcdxyz.supabase.co
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImljYmJjbmtzdWxpZWFoeHl5d3doIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwODYxNzAsImV4cCI6MjA5ODY2MjE3MH0.GOANkeAvqGM_Htx9r1xFWMlT0gzzF-z0tXhPOSqg5wo";  // the long "anon public" key
+const SUPABASE_URL = "";      // e.g. https://abcdxyz.supabase.co
+const SUPABASE_ANON_KEY = "";  // the long "anon public" key
 const LEAGUE_ID = "main";      // change if you ever run two leagues in one database
 
 let DB = null;
@@ -449,6 +479,30 @@ function sortedRaces(){
       return a.num-b.num;
     });
 }
+// Suggest which unscored race to run next: the one whose field contains the most
+// cars that have raced the fewest times so far (spreads participation evenly).
+function suggestNextRace(){
+  const runCount = {};
+  DB.cars.forEach(c=> runCount[c.num]=0);
+  DB.races.forEach(r=>{ if(r.results) r.results.forEach(x=>{ runCount[x.num]=(runCount[x.num]||0)+1; }); });
+  const unscored = racesWithNumbers().filter(({r})=> !r.results && (r.entries&&r.entries.length));
+  if(!unscored.length) return null;
+  const minRuns = Math.min(...Object.values(runCount));
+  // score each unscored race by how many of its entrants sit at (or near) the fewest races run
+  let best=null;
+  unscored.forEach(({r,num})=>{
+    let underRaced=0, totalDeficit=0;
+    r.entries.forEach(n=>{
+      const rc = runCount[n]||0;
+      if(rc===minRuns) underRaced++;
+      totalDeficit += (Math.max(...Object.values(runCount)) - rc);
+    });
+    const score = underRaced*1000 + totalDeficit; // prioritize count at min, break ties by aggregate deficit
+    if(!best || score>best.score) best={race:r, num, underRaced, score};
+  });
+  return best;
+}
+
 function computeStandings(opts={}){
   const {playoffOnly=false, regularOnly=false} = opts;
   const map = {}; // num -> agg
@@ -566,7 +620,7 @@ function render(){
   document.getElementById('tagline').textContent =
     `${DB.cars.filter(c=>c.active).length} cars · ${scored} of ${DB.races.length} races scored · top 16 make the playoffs`;
   ({standings:renderStandings, schedule:renderSchedule, enter:renderEnter,
-    cars:renderCars, teams:renderTeams, fights:renderFights, rules:renderRules, data:renderData}[currentTab])();
+    cars:renderCars, drivers:renderDrivers, teams:renderTeams, fights:renderFights, rules:renderRules, data:renderData}[currentTab])();
 }
 
 /* ===== STANDINGS ===== */
@@ -633,13 +687,13 @@ function renderStandings(){
     const cutline = (i===15 && sorted.length>16) ? ' cutline' : '';
     bodyRows += `<tr class="${cutline}">
       <td class="pos">${i+1}</td>
-      <td class="l"><span class="carno">#${esc(r.num)}</span>${r.wins?`<span class="win-badge">${r.wins}W</span>`:''}</td>
+      <td class="l"><span class="carno-cell">${logoImg(r.num)}<span><span class="carno">#${esc(r.num)}</span>${r.wins?`<span class="win-badge">${r.wins}W</span>`:''}${carDriver(r.num)?`<br><span class="driver-name">${esc(carDriver(r.num))}</span>`:''}</span></span></td>
       <td class="pts">${r.pts}</td>
       <td>${r.races}</td>
       <td class="hide-sm">${r.wins}</td>
       <td class="hide-sm">${fmt(r.avgStart)}</td>
       <td>${fmt(r.avgFinish)}</td>
-      <td class="hide-sm">${r.diff>0?'+':''}${r.diff}</td>
+      <td>${r.diff>0?'+':''}${r.diff}</td>
       ${oddsCell(r.num)}
     </tr>`;
     if(i===15 && sorted.length>16){
@@ -667,7 +721,7 @@ function renderStandings(){
           ${th('wins','Wins','hide-sm')}
           ${th('avgStart','Avg St','hide-sm')}
           ${th('avgFinish','Avg Fin')}
-          ${th('diff','Diff','hide-sm')}
+          ${th('diff','Diff')}
           ${proj?`<th class="hide-sm l" title="Simulated chance of finishing top 16">Playoff %</th>`:''}
         </tr></thead>
         <tbody>${bodyRows}</tbody>
@@ -715,13 +769,25 @@ function renderSchedule(){
     </tr>`;
   }).join('');
 
+  const sug = suggestNextRace();
+  const sugBanner = sug ? `
+    <div class="card" style="border-left:3px solid var(--gold);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap">
+      <div>
+        <div class="mini" style="color:var(--gold);letter-spacing:.1em;text-transform:uppercase;font-weight:600">Suggested next race</div>
+        <div style="font-family:var(--disp);font-style:italic;font-weight:700;font-size:19px;margin-top:2px">Race ${sug.num} · ${esc(sug.race.name)}</div>
+        <div class="mini" style="margin-top:2px">Includes ${sug.underRaced} car${sug.underRaced===1?'':'s'} with the fewest races run — running this evens out participation.</div>
+      </div>
+      <button class="btn flag" data-race-next="${sug.race.id}">Enter this race →</button>
+    </div>` : '';
+
   view.innerHTML = `
     <div class="flex-head">
       <div><h2 class="sec">Schedule</h2>
-        <p class="lead" style="margin:0">${DB.regularCount} regular-season races, playoffs to come. Edits save automatically.</p>
+        <p class="lead" style="margin:0">${DB.regularCount} regular-season races, playoffs to come. Races display in date order; each keeps its original number. Edits save automatically.</p>
       </div>
       <button class="btn flag" id="addRace">+ Add race</button>
     </div>
+    ${sugBanner}
     <div class="card" style="padding:6px 4px">
       <table class="data">
         <thead><tr>
@@ -731,6 +797,12 @@ function renderSchedule(){
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+
+  const nextBtn = view.querySelector('[data-race-next]');
+  if(nextBtn) nextBtn.onclick=()=>{
+    enterTargetId = nextBtn.dataset.raceNext; currentTab='enter';
+    [...document.querySelectorAll('#tabs button')].forEach(x=>x.classList.toggle('on',x.dataset.tab==='enter')); render();
+  };
 
   view.querySelectorAll('input[data-f],select[data-f]').forEach(el=>{
     el.onchange = ()=>{
@@ -781,7 +853,7 @@ function renderEnter(){
     const teamName = tm && tm.team ? tm.team : '';
     const style = col ? `border-left:4px solid ${col};background:${hexTint(col)}` : 'border-left:4px solid transparent';
     return `<div class="entry-row" style="${style}" title="${esc(teamName)}">
-      <span class="lab" ${col?`style="color:${col}"`:''}>#${esc(num)}</span>
+      <span class="lab" ${col?`style="color:${col}"`:''}>${logoImg(num,18)}#${esc(num)}${carDriver(num)?`<span class="driver-name" style="margin-left:6px;font-weight:500">${esc(carDriver(num))}</span>`:''}</span>
       <div class="row" style="gap:8px">
         <input class="num" data-num="${esc(num)}" data-k="start" placeholder="St" value="${e.start??''}" inputmode="numeric">
         <input class="num" data-num="${esc(num)}" data-k="finish" placeholder="Fin" value="${e.finish??''}" inputmode="numeric">
@@ -945,7 +1017,8 @@ function renderCars(){
   const rows = [...DB.cars].sort((a,b)=>parseFloat(a.num)-parseFloat(b.num)).map(c=>`
     <tr>
       <td class="l"><span class="carno">#${esc(c.num)}</span></td>
-      <td class="l"><select data-num="${esc(c.num)}" data-f="team" style="width:100%;max-width:240px">${teamOpts(c.team||'')}</select></td>
+      <td class="l"><input data-num="${esc(c.num)}" data-f="driver" value="${esc(c.driver||'')}" placeholder="— driver name —" style="width:100%;max-width:200px"></td>
+      <td class="l"><select data-num="${esc(c.num)}" data-f="team" style="width:100%;max-width:220px">${teamOpts(c.team||'')}</select></td>
       <td class="l"><label class="mini" style="cursor:pointer"><input type="checkbox" data-num="${esc(c.num)}" data-f="active" ${c.active?'checked':''}> active</label></td>
       <td class="l"><button class="btn ghost sm" data-delcar="${esc(c.num)}">✕</button></td>
     </tr>`).join('');
@@ -953,7 +1026,7 @@ function renderCars(){
   view.innerHTML = `
     <div class="flex-head">
       <div><h2 class="sec">Cars</h2>
-        <p class="lead" style="margin:0">The roster the league runs on. Assign each car a team from the dropdown, or create one with "+ New team". Manage teams on the Teams tab.</p>
+        <p class="lead" style="margin:0">The roster the league runs on. Add driver names, assign teams, and manage the field. Driver names appear across standings and race screens.</p>
       </div>
       <div class="row">
         <input id="newCar" placeholder="Car #" class="num" style="width:90px">
@@ -962,11 +1035,15 @@ function renderCars(){
     </div>
     <div class="card" style="padding:6px 4px">
       <table class="data">
-        <thead><tr><th class="l">Car</th><th class="l">Team</th><th class="l">Status</th><th class="l"></th></tr></thead>
+        <thead><tr><th class="l">Car</th><th class="l">Driver</th><th class="l">Team</th><th class="l">Status</th><th class="l"></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
 
+  view.querySelectorAll('input[data-f="driver"]').forEach(el=> el.onchange=()=>{
+    const c=DB.cars.find(x=>x.num===el.dataset.num); if(!c) return;
+    c.driver = el.value.trim(); saveDB();
+  });
   view.querySelectorAll('select[data-f="team"]').forEach(el=> el.onchange=()=>{
     const c=DB.cars.find(x=>x.num===el.dataset.num); if(!c) return;
     if(el.value==='__new__'){
@@ -991,6 +1068,59 @@ function renderCars(){
   };
 }
 
+/* ===== DRIVERS ===== */
+function renderDrivers(){
+  const stand = {};
+  computeStandings().forEach(r=> stand[r.num]=r);
+  // A "driver" is a named car (car number is the stable identity). Cars without a
+  // name still appear, labeled by number, so nothing is hidden.
+  const rows = [...DB.cars]
+    .filter(c=>c.active || stand[c.num])   // show active cars and any that have raced
+    .map(c=>{
+      const s = stand[c.num] || {pts:0,races:0,wins:0,avgStart:null,avgFinish:null,diff:0};
+      return {num:c.num, driver:c.driver||'', team:c.team||'', ...s};
+    })
+    .sort((a,b)=> b.pts-a.pts || b.diff-a.diff);
+
+  const named = rows.filter(r=>r.driver).length;
+
+  const body = rows.map((r,i)=>{
+    const col = carTeamColor(r.num);
+    return `<tr>
+      <td class="pos">${i+1}</td>
+      <td class="l"><span class="carno-cell">${logoImg(r.num)}<span>
+        <span class="carno">#${esc(r.num)}</span>
+        ${r.driver? `<br><span class="driver-name" style="color:var(--ink);font-weight:600">${esc(r.driver)}</span>` : `<br><span class="driver-name"><em>unnamed</em></span>`}
+      </span></span></td>
+      <td class="l">${r.team? `<span class="carno-pill" style="border-color:${col};color:${col}">${esc(r.team)}</span>`:'<span class="mini">—</span>'}</td>
+      <td class="pts">${r.pts}</td>
+      <td>${r.races}</td>
+      <td>${r.wins}</td>
+      <td class="hide-sm">${fmt(r.avgStart)}</td>
+      <td>${fmt(r.avgFinish)}</td>
+      <td>${r.diff>0?'+':''}${r.diff}</td>
+    </tr>`;
+  }).join('');
+
+  view.innerHTML = `
+    <div class="flex-head">
+      <div><h2 class="sec">Drivers</h2>
+        <p class="lead" style="margin:0">Every car and its driver this season. Car number is the permanent identity — the driver name is a label, so stats follow the number. ${named} of ${rows.length} cars named. Edit names on the Cars tab.</p>
+      </div>
+    </div>
+    <div class="card" style="padding:6px 4px">
+      <table class="data">
+        <thead><tr>
+          <th class="l" style="width:34px">#</th><th class="l">Car · Driver</th><th class="l">Team</th>
+          <th>Pts</th><th>Races</th><th>Wins</th><th class="hide-sm">Avg St</th><th>Avg Fin</th><th>Diff</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+    <p class="mini" style="margin-top:12px">Coming later: 2024 data import and career stats across seasons. Because the car number is the identity, those will attach here automatically.</p>
+  `;
+}
+
 /* ===== TEAMS ===== */
 function renderTeams(){
   // combined stats per team from standings
@@ -1013,8 +1143,11 @@ function renderTeams(){
       <td class="l">
         <div class="row" style="gap:8px;align-items:center">
           <span class="team-dot" style="background:${t.color}"></span>
-          <input data-team-name="${esc(t.name)}" value="${esc(t.name)}" style="font-weight:600;min-width:150px">
+          ${t.logo? `<img class="team-logo" src="${t.logo}" style="width:28px;height:28px" alt="">` : `<span class="logo-ph" style="border-color:${t.color}">—</span>`}
+          <input data-team-name="${esc(t.name)}" value="${esc(t.name)}" style="font-weight:600;min-width:140px">
           <input type="color" data-team-color="${esc(t.name)}" value="${t.color}" title="Team color" style="width:34px;height:30px;padding:2px;border-radius:6px;cursor:pointer">
+          <label class="btn ghost sm" style="cursor:pointer;margin:0">${t.logo?'Change':'Logo'}<input type="file" accept="image/*" data-team-logo="${esc(t.name)}" style="display:none"></label>
+          ${t.logo? `<button class="btn ghost sm" data-team-logo-clear="${esc(t.name)}" title="Remove logo">✕</button>`:''}
         </div>
         <div class="mini" style="margin-top:4px">${row.members.length? row.members.map(m=>`<span class="carno-pill" style="border-color:${t.color};color:${t.color}">#${esc(m)}</span>`).join(' ') : '<em>no cars</em>'}</div>
       </td>
@@ -1064,6 +1197,18 @@ function renderTeams(){
   });
   view.querySelectorAll('input[data-team-color]').forEach(inp=>{
     inp.onchange=()=>{ const t=teamByName(inp.dataset.teamColor); if(t){ t.color=inp.value; saveDB(); render(); } };
+  });
+  view.querySelectorAll('input[data-team-logo]').forEach(inp=>{
+    inp.onchange=()=>{
+      const file=inp.files[0]; if(!file) return;
+      downscaleImage(file, 128, dataUrl=>{
+        if(!dataUrl){ toast('Could not read that image'); return; }
+        const t=teamByName(inp.dataset.teamLogo); if(t){ t.logo=dataUrl; saveDB(); render(); toast('Logo added'); }
+      });
+    };
+  });
+  view.querySelectorAll('[data-team-logo-clear]').forEach(b=> b.onclick=()=>{
+    const t=teamByName(b.dataset.teamLogoClear); if(t){ delete t.logo; saveDB(); render(); toast('Logo removed'); }
   });
   document.getElementById('addTeam').onclick=()=>{
     const v=document.getElementById('newTeam').value.trim(); if(!v) return;
