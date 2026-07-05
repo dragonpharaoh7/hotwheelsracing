@@ -50,6 +50,35 @@
   .logo-ph{width:28px;height:28px;border-radius:4px;border:1.5px dashed;display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:12px;flex:none;opacity:.6}
   .carno-cell{display:inline-flex;align-items:center;gap:8px}
   .driver-name{font-family:var(--semi);font-weight:500;color:var(--muted);font-size:12.5px}
+  a.carlink{text-decoration:none;color:inherit;cursor:pointer;border-bottom:1.5px solid transparent;transition:border-color .1s,color .1s}
+  a.carlink:hover{color:var(--flag);border-bottom-color:var(--flag)}
+
+  /* Roster tiles */
+  .roster{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+  .rtile{background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--flag);border-radius:6px;
+    padding:14px;cursor:pointer;transition:transform .1s,border-color .1s,background .1s;position:relative;overflow:hidden}
+  .rtile:hover{background:var(--panel2);transform:translateY(-2px)}
+  .rtile .bignum{font-family:var(--disp);font-style:italic;font-weight:800;font-size:34px;line-height:1;color:#fff}
+  .rtile .rdriver{font-family:var(--semi);font-weight:600;font-size:15px;margin-top:6px;color:var(--ink);min-height:20px}
+  .rtile .rteam{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
+  .rtile .rstats{display:flex;gap:12px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+  .rtile .rstat{display:flex;flex-direction:column}
+  .rtile .rstat b{font-family:var(--disp);font-style:italic;font-size:18px;color:#fff;line-height:1}
+  .rtile .rstat span{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-top:2px}
+  .rtile .rlogo{position:absolute;top:12px;right:12px}
+
+  /* Driver detail */
+  .dd-head{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .dd-num{font-family:var(--disp);font-style:italic;font-weight:800;font-size:64px;line-height:.9;color:#fff}
+  .dd-meta h2{font-family:var(--disp);font-style:italic;text-transform:uppercase;margin:0;font-size:30px}
+  .dd-back{font-family:var(--semi);font-weight:600;text-transform:uppercase;letter-spacing:.05em;font-size:12px;
+    color:var(--muted);background:none;border:none;cursor:pointer;padding:8px 0;display:inline-flex;gap:6px;align-items:center}
+  .dd-back:hover{color:var(--flag)}
+  .fin-badge{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 6px;
+    border-radius:4px;font-family:var(--disp);font-style:italic;font-weight:800;font-size:14px}
+  .fin-1{background:var(--gold);color:#221a00}
+  .fin-top5{background:rgba(37,194,116,.2);color:#4ee39a}
+  .fin-mid{background:var(--panel2);color:var(--ink)}
   .carno-pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1px 7px;margin:1px 1px 0 0;
     border:1.5px solid var(--line2);border-radius:20px;background:rgba(255,255,255,.03)}
 
@@ -594,10 +623,26 @@ function simulatePlayoffs(iters=3000){
 const view = document.getElementById('view');
 let currentTab = 'standings';
 let sortState = {key:'pts', dir:-1};
+let driverDetailNum = null;   // when set, show the driver detail page instead of the tab
+
+// Navigate to a driver's detail page.
+function openDriver(num){ driverDetailNum = num; render(); window.scrollTo(0,0); }
+// Clickable car-number link (only the number is tappable, per design).
+function carLink(num, cls='carno'){
+  if(num==null || num==='—') return `<span class="${cls}">#—</span>`;
+  return `<a href="#" class="${cls} carlink" data-driver-link="${esc(String(num))}">#${esc(String(num))}</a>`;
+}
+// Wire up any car links currently in the view.
+function bindCarLinks(){
+  view.querySelectorAll('a.carlink[data-driver-link]').forEach(a=>{
+    a.onclick=(e)=>{ e.preventDefault(); openDriver(a.dataset.driverLink); };
+  });
+}
 
 document.getElementById('tabs').addEventListener('click', e=>{
   const b = e.target.closest('button[data-tab]'); if(!b) return;
   currentTab = b.dataset.tab;
+  driverDetailNum = null;   // leaving to a tab clears driver detail
   [...document.querySelectorAll('#tabs button')].forEach(x=>x.classList.toggle('on', x===b));
   render();
 });
@@ -619,8 +664,14 @@ function render(){
   const scored = DB.races.filter(r=>r.results).length;
   document.getElementById('tagline').textContent =
     `${DB.cars.filter(c=>c.active).length} cars · ${scored} of ${DB.races.length} races scored · top 16 make the playoffs`;
+  if(driverDetailNum!=null){
+    renderDriverDetail(driverDetailNum);
+    bindCarLinks();
+    return;
+  }
   ({standings:renderStandings, schedule:renderSchedule, enter:renderEnter,
     cars:renderCars, drivers:renderDrivers, teams:renderTeams, fights:renderFights, rules:renderRules, data:renderData}[currentTab])();
+  bindCarLinks();
 }
 
 /* ===== STANDINGS ===== */
@@ -644,7 +695,8 @@ function renderStandings(){
     return (av<bv?-1:av>bv?1:0)*dir || tiebreak(a,b);
   });
 
-  const leader = sorted[0];
+  // Leader readout always reflects the true points ranking, never the table's current sort.
+  const leader = rows[0];
   const totalRaces = DB.races.filter(r=>r.results).length;
 
   // Playoff projection — only meaningful in overall scope with races left and some data
@@ -663,12 +715,12 @@ function renderStandings(){
 
   const statCards = leader ? `
     <div class="stat-cards">
-      <div class="stat"><div class="k">Points Leader</div><div class="v">#${esc(leader.num)}</div></div>
+      <div class="stat"><div class="k">Points Leader</div><div class="v">${carLink(leader.num,'carlink')}</div></div>
       <div class="stat"><div class="k">Leader Points</div><div class="v">${leader.pts}</div></div>
       <div class="stat"><div class="k">Races Scored</div><div class="v">${totalRaces}<small> / ${DB.races.length}</small></div></div>
       ${proj
         ? `<div class="stat"><div class="k">Projected Cutoff</div><div class="v">${proj.projectedCutoff}<small> pts · ${proj.racesLeft} left</small></div></div>`
-        : `<div class="stat"><div class="k">Most Wins</div><div class="v">#${esc([...rows].sort((a,b)=>b.wins-a.wins)[0]?.num||'—')} <small>${[...rows].sort((a,b)=>b.wins-a.wins)[0]?.wins||0}W</small></div></div>`}
+        : `<div class="stat"><div class="k">Most Wins</div><div class="v">${carLink([...rows].sort((a,b)=>b.wins-a.wins)[0]?.num||'—','carlink')} <small>${[...rows].sort((a,b)=>b.wins-a.wins)[0]?.wins||0}W</small></div></div>`}
     </div>` : '';
 
   const th = (key,label,cls='')=>`<th class="sortable ${cls}" data-sort="${key}">${label}${sortState.key===key?` <span class="ar">${sortState.dir<0?'▼':'▲'}</span>`:''}</th>`;
@@ -687,7 +739,7 @@ function renderStandings(){
     const cutline = (i===15 && sorted.length>16) ? ' cutline' : '';
     bodyRows += `<tr class="${cutline}">
       <td class="pos">${i+1}</td>
-      <td class="l"><span class="carno-cell">${logoImg(r.num)}<span><span class="carno">#${esc(r.num)}</span>${r.wins?`<span class="win-badge">${r.wins}W</span>`:''}${carDriver(r.num)?`<br><span class="driver-name">${esc(carDriver(r.num))}</span>`:''}</span></span></td>
+      <td class="l"><span class="carno-cell">${logoImg(r.num)}<span>${carLink(r.num)}${r.wins?`<span class="win-badge">${r.wins}W</span>`:''}${carDriver(r.num)?`<br><span class="driver-name">${esc(carDriver(r.num))}</span>`:''}</span></span></td>
       <td class="pts">${r.pts}</td>
       <td>${r.races}</td>
       <td class="hide-sm">${r.wins}</td>
@@ -761,7 +813,7 @@ function renderSchedule(){
       </td>
       <td class="l"><input type="date" data-f="date" data-id="${r.id}" value="${esc(r.date||'')}"></td>
       <td class="l"><label class="mini" style="cursor:pointer"><input type="checkbox" data-f="playoff" data-id="${r.id}" ${r.playoff?'checked':''}> PO</label></td>
-      <td>${scored?`<span class="chip">#${esc(winner)} won</span>`:`<span class="mini">—</span>`}</td>
+      <td>${scored?`<span class="chip" style="padding-right:4px">${carLink(winner,'carlink')} won</span>`:`<span class="mini">—</span>`}</td>
       <td class="l">
         <button class="btn ghost sm" data-goto="${r.id}">${scored?'Edit':'Enter'}</button>
         <button class="btn ghost sm" data-del="${r.id}" title="Remove race">✕</button>
@@ -853,7 +905,7 @@ function renderEnter(){
     const teamName = tm && tm.team ? tm.team : '';
     const style = col ? `border-left:4px solid ${col};background:${hexTint(col)}` : 'border-left:4px solid transparent';
     return `<div class="entry-row" style="${style}" title="${esc(teamName)}">
-      <span class="lab" ${col?`style="color:${col}"`:''}>${logoImg(num,18)}#${esc(num)}${carDriver(num)?`<span class="driver-name" style="margin-left:6px;font-weight:500">${esc(carDriver(num))}</span>`:''}</span>
+      <span class="lab" ${col?`style="color:${col}"`:''}>${logoImg(num,18)}<a href="#" class="carlink" data-driver-link="${esc(num)}" style="color:inherit">#${esc(num)}</a>${carDriver(num)?`<span class="driver-name" style="margin-left:6px;font-weight:500">${esc(carDriver(num))}</span>`:''}</span>
       <div class="row" style="gap:8px">
         <input class="num" data-num="${esc(num)}" data-k="start" placeholder="St" value="${e.start??''}" inputmode="numeric">
         <input class="num" data-num="${esc(num)}" data-k="finish" placeholder="Fin" value="${e.finish??''}" inputmode="numeric">
@@ -894,7 +946,6 @@ function renderEnter(){
 
       <div class="row" style="margin-bottom:6px;justify-content:space-between">
         <strong style="font-family:var(--disp);text-transform:uppercase;font-size:13px">Enter finishing positions</strong>
-        <button class="btn ghost sm" id="pasteBtn" title="Paste the finishing order, 1st to last">Paste finishing order</button>
       </div>
 
       <div class="grid-entry" id="entryGrid">${entryRows}</div>
@@ -948,7 +999,7 @@ function renderEnter(){
         <strong style="font-family:var(--disp);text-transform:uppercase;font-size:13px">Live scoring preview</strong>
         <table class="data" style="margin-top:8px">
           <thead><tr><th class="l">Fin</th><th class="l">Car</th><th>Start</th><th>Points</th></tr></thead>
-          <tbody>${list.map(r=>`<tr><td class="l pos">${r.finish}</td><td class="l carno">#${esc(r.num)}</td><td>${r.start??'—'}</td><td class="pts">${r.pts}</td></tr>`).join('')}</tbody>
+          <tbody>${list.map(r=>`<tr><td class="l pos">${r.finish}</td><td class="l">${carLink(r.num)}</td><td>${r.start??'—'}</td><td class="pts">${r.pts}</td></tr>`).join('')}</tbody>
         </table>
       </div>`;
   }
@@ -961,33 +1012,6 @@ function renderEnter(){
     // auto-add any unknown car numbers to the roster so they're valid
     list.forEach(n=>{ if(!DB.cars.some(c=>c.num===n)) DB.cars.push({num:n,team:'',active:true}); });
     race.entries = list; saveDB(); render(); toast(`Field set to ${list.length} cars`);
-  };
-
-  document.getElementById('pasteBtn').onclick = ()=>{
-    const raw = prompt('Paste finishing order (car numbers, 1st to last), separated by commas or spaces:');
-    if(!raw) return;
-    const order = raw.split(/[\s,]+/).map(s=>s.trim()).filter(Boolean);
-    // if any pasted car isn't in the current field, extend the field and re-render first
-    const missing = order.filter(n=> !field.includes(n));
-    if(missing.length){
-      missing.forEach(n=>{ if(!DB.cars.some(c=>c.num===n)) DB.cars.push({num:n,team:'',active:true}); });
-      race.entries = [...field, ...missing]; saveDB(); render();
-      // after re-render, fill values
-      setTimeout(()=>{
-        order.forEach((num,idx)=>{
-          const finInp = view.querySelector(`#entryGrid input[data-num="${CSS.escape(num)}"][data-k="finish"]`);
-          const stInp  = view.querySelector(`#entryGrid input[data-num="${CSS.escape(num)}"][data-k="start"]`);
-          if(finInp){ finInp.value = idx+1; if(stInp && !stInp.value) stInp.value = idx+1; finInp.dispatchEvent(new Event('input')); }
-        });
-      },0);
-      return;
-    }
-    order.forEach((num,idx)=>{
-      const finInp = view.querySelector(`#entryGrid input[data-num="${CSS.escape(num)}"][data-k="finish"]`);
-      const stInp  = view.querySelector(`#entryGrid input[data-num="${CSS.escape(num)}"][data-k="start"]`);
-      if(finInp){ finInp.value = idx+1; if(stInp && !stInp.value) stInp.value = idx+1; }
-    });
-    refreshHint(); livePreview(); toast(`Filled ${order.length} finishing spots`);
   };
 
   document.getElementById('saveBtn').onclick = ()=>{
@@ -1016,7 +1040,7 @@ function renderCars(){
     `<option value="__new__">+ New team…</option>`;
   const rows = [...DB.cars].sort((a,b)=>parseFloat(a.num)-parseFloat(b.num)).map(c=>`
     <tr>
-      <td class="l"><span class="carno">#${esc(c.num)}</span></td>
+      <td class="l">${carLink(c.num)}</td>
       <td class="l"><input data-num="${esc(c.num)}" data-f="driver" value="${esc(c.driver||'')}" placeholder="— driver name —" style="width:100%;max-width:200px"></td>
       <td class="l"><select data-num="${esc(c.num)}" data-f="team" style="width:100%;max-width:220px">${teamOpts(c.team||'')}</select></td>
       <td class="l"><label class="mini" style="cursor:pointer"><input type="checkbox" data-num="${esc(c.num)}" data-f="active" ${c.active?'checked':''}> active</label></td>
@@ -1068,57 +1092,137 @@ function renderCars(){
   };
 }
 
-/* ===== DRIVERS ===== */
+/* ===== DRIVERS (roster tiles) ===== */
 function renderDrivers(){
   const stand = {};
   computeStandings().forEach(r=> stand[r.num]=r);
-  // A "driver" is a named car (car number is the stable identity). Cars without a
-  // name still appear, labeled by number, so nothing is hidden.
-  const rows = [...DB.cars]
-    .filter(c=>c.active || stand[c.num])   // show active cars and any that have raced
+  const cars = [...DB.cars]
+    .filter(c=>c.active || stand[c.num])
     .map(c=>{
-      const s = stand[c.num] || {pts:0,races:0,wins:0,avgStart:null,avgFinish:null,diff:0};
+      const s = stand[c.num] || {pts:0,races:0,wins:0,avgFinish:null,diff:0};
       return {num:c.num, driver:c.driver||'', team:c.team||'', ...s};
     })
     .sort((a,b)=> b.pts-a.pts || b.diff-a.diff);
 
-  const named = rows.filter(r=>r.driver).length;
+  const named = cars.filter(c=>c.driver).length;
 
-  const body = rows.map((r,i)=>{
-    const col = carTeamColor(r.num);
-    return `<tr>
-      <td class="pos">${i+1}</td>
-      <td class="l"><span class="carno-cell">${logoImg(r.num)}<span>
-        <span class="carno">#${esc(r.num)}</span>
-        ${r.driver? `<br><span class="driver-name" style="color:var(--ink);font-weight:600">${esc(r.driver)}</span>` : `<br><span class="driver-name"><em>unnamed</em></span>`}
-      </span></span></td>
-      <td class="l">${r.team? `<span class="carno-pill" style="border-color:${col};color:${col}">${esc(r.team)}</span>`:'<span class="mini">—</span>'}</td>
-      <td class="pts">${r.pts}</td>
-      <td>${r.races}</td>
-      <td>${r.wins}</td>
-      <td class="hide-sm">${fmt(r.avgStart)}</td>
-      <td>${fmt(r.avgFinish)}</td>
-      <td>${r.diff>0?'+':''}${r.diff}</td>
-    </tr>`;
+  const tiles = cars.map(c=>{
+    const col = carTeamColor(c.num) || 'var(--flag)';
+    return `<div class="rtile" data-driver-link="${esc(c.num)}" style="border-top-color:${col}">
+      <div class="rlogo">${logoImg(c.num,26)}</div>
+      <div class="bignum">#${esc(c.num)}</div>
+      <div class="rdriver">${c.driver? esc(c.driver) : '<span style="color:var(--muted)">Unnamed</span>'}</div>
+      <div class="rteam">${c.team? esc(c.team) : '—'}</div>
+      <div class="rstats">
+        <div class="rstat"><b>${c.pts}</b><span>Pts</span></div>
+        <div class="rstat"><b>${c.races}</b><span>Races</span></div>
+        <div class="rstat"><b>${c.wins}</b><span>Wins</span></div>
+        <div class="rstat"><b>${c.diff>0?'+':''}${c.diff}</b><span>Diff</span></div>
+      </div>
+    </div>`;
   }).join('');
 
   view.innerHTML = `
     <div class="flex-head">
-      <div><h2 class="sec">Drivers</h2>
-        <p class="lead" style="margin:0">Every car and its driver this season. Car number is the permanent identity — the driver name is a label, so stats follow the number. ${named} of ${rows.length} cars named. Edit names on the Cars tab.</p>
+      <div><h2 class="sec">Roster</h2>
+        <p class="lead" style="margin:0">Tap any car for its full driver page — 2026 results and upcoming races. ${named} of ${cars.length} cars named; edit names on the Cars tab.</p>
       </div>
     </div>
+    <div class="roster">${tiles}</div>
+  `;
+
+  view.querySelectorAll('.rtile[data-driver-link]').forEach(t=>{
+    t.onclick=()=> openDriver(t.dataset.driverLink);
+  });
+}
+
+/* ===== DRIVER DETAIL (ESPN-style player page) ===== */
+function renderDriverDetail(num){
+  const car = DB.cars.find(c=>c.num===num);
+  const driver = car && car.driver ? car.driver : '';
+  const team = car && car.team ? car.team : '';
+  const col = carTeamColor(num) || 'var(--flag)';
+  const s = computeStandings().find(r=>r.num===num);
+  const rankAll = computeStandings();
+  const rank = rankAll.findIndex(r=>r.num===num);
+
+  // This car's finishes across scored races (in schedule/date order), plus upcoming entered races.
+  const ordered = sortedRaces();
+  const results = [], upcoming = [];
+  ordered.forEach(({r,num:rn})=>{
+    if(r.results){
+      const res = r.results.find(x=>x.num===num);
+      if(res) results.push({raceNum:rn, name:r.name, type:r.type, date:r.date, start:res.start, finish:res.finish, pts:pointsForFinish(res.finish)});
+    } else if(r.entries && r.entries.includes(num)){
+      upcoming.push({raceNum:rn, name:r.name, type:r.type, date:r.date});
+    }
+  });
+
+  const finBadge = (f)=>{ const cls = f===1?'fin-1' : f<=5?'fin-top5':'fin-mid'; return `<span class="fin-badge ${cls}">${f}</span>`; };
+
+  const statChips = s ? `
+    <div class="stat-cards" style="margin-top:16px">
+      <div class="stat" style="border-left-color:${col}"><div class="k">Season Rank</div><div class="v">${rank>=0?rank+1:'—'}<small> / ${rankAll.length}</small></div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Points</div><div class="v">${s.pts}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Wins</div><div class="v">${s.wins}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Avg Finish</div><div class="v">${fmt(s.avgFinish)}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Avg Start</div><div class="v">${fmt(s.avgStart)}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Differential</div><div class="v">${s.diff>0?'+':''}${s.diff}</div></div>
+    </div>` : `<p class="lead" style="margin-top:16px">No races scored yet this season.</p>`;
+
+  const resultsTable = results.length ? `
     <div class="card" style="padding:6px 4px">
       <table class="data">
-        <thead><tr>
-          <th class="l" style="width:34px">#</th><th class="l">Car · Driver</th><th class="l">Team</th>
-          <th>Pts</th><th>Races</th><th>Wins</th><th class="hide-sm">Avg St</th><th>Avg Fin</th><th>Diff</th>
-        </tr></thead>
-        <tbody>${body}</tbody>
+        <thead><tr><th class="l">Rd</th><th class="l">Race</th><th class="l">Type</th><th>Start</th><th>Finish</th><th>Pts</th></tr></thead>
+        <tbody>${results.map(x=>`<tr>
+          <td class="l pos">${x.raceNum}</td>
+          <td class="l">${esc(x.name)}${x.date?`<br><span class="mini">${esc(x.date)}</span>`:''}</td>
+          <td class="l">${typeChip(x.type)}</td>
+          <td>${x.start??'—'}</td>
+          <td>${finBadge(x.finish)}</td>
+          <td class="pts">${x.pts}</td>
+        </tr>`).join('')}</tbody>
       </table>
+    </div>` : `<p class="mini">No results recorded yet.</p>`;
+
+  const upcomingList = upcoming.length ? `
+    <div class="card" style="padding:6px 4px">
+      <table class="data">
+        <thead><tr><th class="l">Rd</th><th class="l">Race</th><th class="l">Type</th><th class="l">Date</th></tr></thead>
+        <tbody>${upcoming.map(x=>`<tr>
+          <td class="l pos">${x.raceNum}</td>
+          <td class="l">${esc(x.name)}</td>
+          <td class="l">${typeChip(x.type)}</td>
+          <td class="l">${x.date? esc(x.date) : '<span class="mini">TBD</span>'}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>` : `<p class="mini">Not entered in any upcoming races yet.</p>`;
+
+  view.innerHTML = `
+    <button class="dd-back" id="ddBack">← Back to roster</button>
+    <div class="dd-head" style="margin-top:6px">
+      <div class="dd-num" style="color:${col!=='var(--flag)'?col:'#fff'}">#${esc(num)}</div>
+      <div class="dd-meta" style="display:flex;align-items:center;gap:14px">
+        ${logoImg(num,44)}
+        <div>
+          <h2>${driver? esc(driver) : 'Unnamed Driver'}</h2>
+          <div class="mini" style="margin-top:4px">${team? `<span class="carno-pill" style="border-color:${col};color:${col}">${esc(team)}</span>`:'No team assigned'} · ${DB.season} season</div>
+        </div>
+      </div>
     </div>
-    <p class="mini" style="margin-top:12px">Coming later: 2024 data import and career stats across seasons. Because the car number is the identity, those will attach here automatically.</p>
+    ${statChips}
+    <h2 class="sec" style="font-size:20px;margin:26px 0 10px">2026 Results</h2>
+    ${resultsTable}
+    <h2 class="sec" style="font-size:20px;margin:26px 0 10px">Upcoming Races</h2>
+    ${upcomingList}
+    <p class="mini" style="margin-top:18px">Career stats across seasons (incl. 2024) will appear here once historical data is imported.</p>
   `;
+
+  document.getElementById('ddBack').onclick=()=>{
+    driverDetailNum=null; currentTab='drivers';
+    [...document.querySelectorAll('#tabs button')].forEach(x=>x.classList.toggle('on',x.dataset.tab==='drivers'));
+    render();
+  };
 }
 
 /* ===== TEAMS ===== */
@@ -1149,7 +1253,7 @@ function renderTeams(){
           <label class="btn ghost sm" style="cursor:pointer;margin:0">${t.logo?'Change':'Logo'}<input type="file" accept="image/*" data-team-logo="${esc(t.name)}" style="display:none"></label>
           ${t.logo? `<button class="btn ghost sm" data-team-logo-clear="${esc(t.name)}" title="Remove logo">✕</button>`:''}
         </div>
-        <div class="mini" style="margin-top:4px">${row.members.length? row.members.map(m=>`<span class="carno-pill" style="border-color:${t.color};color:${t.color}">#${esc(m)}</span>`).join(' ') : '<em>no cars</em>'}</div>
+        <div class="mini" style="margin-top:4px">${row.members.length? row.members.map(m=>`<a href="#" class="carno-pill carlink" data-driver-link="${esc(m)}" style="border-color:${t.color};color:${t.color}">#${esc(m)}</a>`).join(' ') : '<em>no cars</em>'}</div>
       </td>
       <td class="pts">${row.pts}</td>
       <td>${row.wins}</td>
@@ -1237,13 +1341,13 @@ function renderFights(){
           rec[f.loser]=rec[f.loser]||{w:0,l:0,t:0}; rec[f.loser].l++; }
   });
   const recRows = Object.entries(rec).sort((a,b)=>b[1].w-a[1].w).map(([n,r])=>
-    `<tr><td class="l carno">#${esc(n)}</td><td>${r.w}</td><td>${r.l}</td><td>${r.t}</td></tr>`).join('');
+    `<tr><td class="l">${carLink(n)}</td><td>${r.w}</td><td>${r.l}</td><td>${r.t}</td></tr>`).join('');
 
   const list = DB.fights.map((f,i)=>`
     <div class="fightrow">
-      <span class="w">#${esc(f.winner)}</span>
+      <span class="w">${carLink(f.winner,'carlink w')}</span>
       <span class="vs">${f.tie?'TIE':'beat'}</span>
-      <span class="${f.tie?'w':'l'}" style="text-align:left">#${esc(f.loser)}</span>
+      <span class="${f.tie?'w':'l'}" style="text-align:left">${carLink(f.loser,'carlink '+(f.tie?'w':'l'))}</span>
       <button class="btn ghost sm" data-delfight="${i}">✕</button>
     </div>`).join('');
 
