@@ -46,6 +46,14 @@
   .wrap{max-width:1180px;margin:0 auto;padding:0 20px 80px}
 
   .team-dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex:none;border:1px solid rgba(255,255,255,.25)}
+  .season-switch{display:inline-flex;gap:6px;margin-top:14px}
+  .season-switch button{font-family:var(--disp);font-style:italic;font-weight:700;text-transform:uppercase;
+    font-size:14px;letter-spacing:.02em;background:var(--panel);color:var(--muted);border:1.5px solid var(--line2);
+    border-radius:5px;padding:7px 14px;cursor:pointer;display:flex;flex-direction:column;line-height:1.1;align-items:flex-start}
+  .season-switch button small{font-family:var(--mono);font-style:normal;font-weight:400;font-size:9.5px;letter-spacing:.04em;opacity:.7;text-transform:none}
+  .season-switch button:hover{color:var(--ink);border-color:var(--steel)}
+  .season-switch button.on{background:var(--flag);color:#fff;border-color:var(--flag)}
+  .season-switch button.on small{opacity:.9}
   .team-logo{border-radius:4px;object-fit:cover;vertical-align:middle;flex:none;background:#fff;border:1px solid var(--line2)}
   .logo-ph{width:28px;height:28px;border-radius:4px;border:1.5px dashed;display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:12px;flex:none;opacity:.6}
   .carno-cell{display:inline-flex;align-items:center;gap:8px}
@@ -252,6 +260,7 @@
     <h1 class="title">Hot Wheels<br>Racing Series <span class="yr" id="seasonLabel">2025–26</span></h1>
     <p class="sub" id="tagline">Loading season…</p>
     <p class="sub" id="syncState" style="margin-top:2px">● connecting…</p>
+    <div id="seasonSwitch" class="season-switch"></div>
   </div>
   <div style="height:6px;display:flex">
     <div style="flex:1;background:var(--flag)"></div>
@@ -327,6 +336,32 @@ function downscaleImage(file, maxpx, cb){
   reader.readAsDataURL(file);
 }
 
+// ===== 2024 season (S1) imported from Hotwheel Stats 2024.xlsx race sheets =====
+const S1_CARS=['1','3','5','6','7','9','10','11','13','14','17','18','19','20','21','24','26','27','35','40','41','43','44','45','46','64','68','75','88','90','92','94','96','97','98','99','300','2001','0 1/2'];
+const S1_FIGHTS=[{winner:'64',loser:'41',tie:false},{winner:'64',loser:'98',tie:false},{winner:'64',loser:'0 1/2',tie:false},{winner:'21',loser:'64',tie:false},{winner:'0 1/2',loser:'18',tie:false},{winner:'64',loser:'40',tie:false},{winner:'94',loser:'13',tie:false},{winner:'7',loser:'26',tie:false},{winner:'9',loser:'1',tie:false},{winner:'20',loser:'9',tie:false},{winner:'64',loser:'40',tie:false},{winner:'92',loser:'0 1/2',tie:false},{winner:'24',loser:'45',tie:false},{winner:'45',loser:'41',tie:false}];
+const S1_RACES=[
+[{n:'40',s:1,l1:3,l2:1,f:4},{n:'24',s:2,l1:2,l2:4,f:5},{n:'92',s:3,l1:6,l2:5,f:1},{n:'88',s:4,l1:1,l2:3,f:6},{n:'13',s:5,l1:5,l2:6,f:3},{n:'99',s:6,l1:7,l2:7,f:2},{n:'18',s:7,l1:4,l2:2,f:7}],
+[{n:'92',s:1,l1:6,l2:6,f:1},{n:'99',s:2,l1:10,l2:10,f:10},{n:'19',s:3,l1:1,l2:1,f:6},{n:'9',s:4,l1:4,l2:4,f:7},{n:'21',s:5,l1:7,l2:7,f:2},{n:'20',s:6,l1:5,l2:5,f:9},{n:'94',s:7,l1:2,l2:2,f:8},{n:'27',s:8,l1:3,l2:3,f:5},{n:'97',s:9,l1:8,l2:8,f:3},{n:'75',s:10,l1:9,l2:9,f:4}],
+[{n:'75',s:14,l1:2,l2:1,f:1},{n:'11',s:10,l1:14,l2:4,f:6},{n:'94',s:3,l1:4,l2:12,f:9},{n:'19',s:1,l1:11,l2:8,f:5},{n:'21',s:9,l1:7,l2:14,f:10},{n:'17',s:6,l1:8,l2:7,f:4},{n:'98',s:11,l1:1,l2:5,f:14},{n:'10',s:5,l1:5,l2:13,f:8},{n:'6',s:13,l1:3,l2:2,f:3},{n:'14',s:7,l1:12,l2:6,f:2},{n:'0 1/2',s:2,l1:6,l2:9,f:7},{n:'13',s:12,l1:10,l2:11,f:12},{n:'18',s:4,l1:13,l2:3,f:11},{n:'300',s:8,l1:9,l2:10,f:13}],
+[{n:'88',s:14,l1:10,l2:10,f:4},{n:'96',s:4,l1:7,l2:7,f:8},{n:'44',s:2,l1:5,l2:5,f:3},{n:'45',s:11,l1:2,l2:2,f:1},{n:'46',s:13,l1:6,l2:6,f:10},{n:'68',s:5,l1:4,l2:4,f:2},{n:'13',s:6,l1:8,l2:8,f:5},{n:'40',s:10,l1:13,l2:13,f:12},{n:'1',s:3,l1:3,l2:3,f:7},{n:'5',s:7,l1:11,l2:11,f:13},{n:'7',s:9,l1:1,l2:1,f:6},{n:'9',s:1,l1:12,l2:12,f:14},{n:'97',s:12,l1:14,l2:14,f:11},{n:'300',s:8,l1:9,l2:9,f:9}],
+[{n:'3',s:12,l1:14,l2:14,f:12},{n:'2001',s:9,l1:10,l2:6,f:6},{n:'35',s:3,l1:6,l2:2,f:5},{n:'20',s:6,l1:11,l2:9,f:9},{n:'64',s:1,l1:4,l2:1,f:14},{n:'98',s:8,l1:5,l2:7,f:2},{n:'99',s:5,l1:8,l2:13,f:11},{n:'1',s:13,l1:13,l2:11,f:8},{n:'11',s:11,l1:7,l2:12,f:7},{n:'75',s:10,l1:9,l2:5,f:13},{n:'26',s:4,l1:2,l2:4,f:3},{n:'90',s:2,l1:3,l2:8,f:10},{n:'43',s:14,l1:1,l2:3,f:1},{n:'41',s:7,l1:12,l2:9,f:4}],
+[{n:'300',s:14,l1:8,l2:6,f:13},{n:'7',s:3,l1:4,l2:11,f:3},{n:'24',s:8,l1:10,l2:2,f:2},{n:'14',s:11,l1:2,l2:9,f:8},{n:'0 1/2',s:13,l1:3,l2:10,f:4},{n:'13',s:2,l1:7,l2:5,f:11},{n:'94',s:5,l1:14,l2:7,f:9},{n:'46',s:4,l1:12,l2:13,f:1},{n:'43',s:10,l1:6,l2:4,f:10},{n:'21',s:12,l1:11,l2:3,f:6},{n:'17',s:9,l1:5,l2:12,f:12},{n:'19',s:7,l1:1,l2:8,f:14},{n:'5',s:6,l1:9,l2:1,f:5},{n:'6',s:1,l1:13,l2:14,f:7}],
+[{n:'0 1/2',s:4,l1:3,l2:13,f:12},{n:'1',s:5,l1:5,l2:4,f:11},{n:'3',s:7,l1:6,l2:3,f:6},{n:'5',s:8,l1:7,l2:6,f:1},{n:'6',s:9,l1:9,l2:9,f:4},{n:'9',s:1,l1:2,l2:5,f:13},{n:'10',s:6,l1:4,l2:2,f:2},{n:'11',s:2,l1:1,l2:1,f:5},{n:'13',s:12,l1:8,l2:7,f:3},{n:'14',s:3,l1:14,l2:14,f:14},{n:'17',s:10,l1:12,l2:12,f:7},{n:'18',s:14,l1:11,l2:8,f:9},{n:'19',s:11,l1:13,l2:11,f:10},{n:'20',s:13,l1:10,l2:10,f:8}],
+[{n:'11',s:10,l1:9,l2:9,f:6},{n:'75',s:1,l1:1,l2:1,f:4},{n:'14',s:6,l1:7,l2:7,f:8},{n:'6',s:8,l1:8,l2:8,f:9},{n:'99',s:5,l1:2,l2:2,f:2},{n:'18',s:3,l1:14,l2:14,f:14},{n:'97',s:4,l1:6,l2:6,f:7},{n:'13',s:2,l1:11,l2:11,f:12},{n:'98',s:11,l1:4,l2:4,f:5},{n:'35',s:14,l1:13,l2:13,f:11},{n:'68',s:13,l1:5,l2:5,f:3},{n:'41',s:9,l1:10,l2:10,f:13},{n:'26',s:12,l1:12,l2:12,f:10},{n:'24',s:7,l1:3,l2:3,f:1}],
+[{n:'13',s:8,l1:6,l2:9,f:9},{n:'21',s:5,l1:1,l2:5,f:3},{n:'10',s:14,l1:11,l2:12,f:13},{n:'3',s:1,l1:2,l2:1,f:4},{n:'20',s:10,l1:7,l2:4,f:11},{n:'7',s:2,l1:4,l2:3,f:12},{n:'94',s:4,l1:9,l2:13,f:14},{n:'40',s:6,l1:3,l2:7,f:6},{n:'41',s:3,l1:5,l2:2,f:5},{n:'46',s:11,l1:13,l2:10,f:10},{n:'64',s:13,l1:14,l2:11,f:2},{n:'92',s:12,l1:8,l2:6,f:1},{n:'43',s:7,l1:10,l2:8,f:8},{n:'26',s:9,l1:12,l2:14,f:7}],
+[{n:'0 1/2',s:5,l1:8,l2:3,f:2},{n:'6',s:6,l1:10,l2:5,f:3},{n:'98',s:1,l1:6,l2:1,f:5},{n:'99',s:7,l1:11,l2:14,f:14},{n:'5',s:8,l1:3,l2:8,f:7},{n:'11',s:4,l1:2,l2:7,f:10},{n:'75',s:11,l1:9,l2:4,f:6},{n:'97',s:12,l1:4,l2:9,f:8},{n:'68',s:2,l1:1,l2:6,f:9},{n:'7',s:13,l1:13,l2:13,f:13},{n:'64',s:3,l1:7,l2:2,f:4},{n:'45',s:14,l1:5,l2:10,f:1},{n:'40',s:10,l1:14,l2:11,f:11},{n:'21',s:9,l1:12,l2:12,f:12}],
+[{n:'6',s:3,l1:2,l2:12,f:13},{n:'10',s:4,l1:13,l2:8,f:8},{n:'11',s:13,l1:5,l2:1,f:9},{n:'9',s:2,l1:12,l2:7,f:6},{n:'14',s:10,l1:14,l2:9,f:7},{n:'18',s:1,l1:9,l2:5,f:5},{n:'96',s:14,l1:11,l2:10,f:12},{n:'3',s:9,l1:3,l2:13,f:11},{n:'35',s:6,l1:6,l2:2,f:1},{n:'44',s:5,l1:8,l2:4,f:3},{n:'27',s:11,l1:1,l2:11,f:14},{n:'300',s:12,l1:10,l2:6,f:10},{n:'98',s:8,l1:4,l2:14,f:4},{n:'92',s:7,l1:7,l2:3,f:2}],
+[{n:'20',s:4,l1:3,l2:3,f:5},{n:'43',s:7,l1:11,l2:6,f:1},{n:'17',s:12,l1:5,l2:14,f:13},{n:'94',s:6,l1:6,l2:12,f:12},{n:'2001',s:5,l1:1,l2:9,f:9},{n:'88',s:8,l1:14,l2:1,f:6},{n:'64',s:13,l1:7,l2:13,f:14},{n:'1',s:9,l1:4,l2:8,f:3},{n:'21',s:14,l1:9,l2:11,f:11},{n:'45',s:10,l1:12,l2:7,f:2},{n:'24',s:2,l1:2,l2:2,f:8},{n:'7',s:1,l1:10,l2:5,f:7},{n:'13',s:3,l1:13,l2:4,f:4},{n:'5',s:11,l1:8,l2:10,f:10}],
+[{n:'21',s:12,l1:10,l2:7,f:9},{n:'24',s:4,l1:5,l2:8,f:3},{n:'26',s:13,l1:7,l2:14,f:4},{n:'27',s:3,l1:1,l2:12,f:5},{n:'40',s:10,l1:9,l2:4,f:14},{n:'41',s:5,l1:2,l2:6,f:7},{n:'43',s:7,l1:3,l2:3,f:6},{n:'44',s:6,l1:6,l2:2,f:13},{n:'45',s:2,l1:4,l2:1,f:1},{n:'46',s:8,l1:8,l2:3,f:11},{n:'64',s:1,l1:13,l2:5,f:2},{n:'68',s:14,l1:14,l2:9,f:8},{n:'88',s:9,l1:11,l2:11,f:10},{n:'90',s:11,l1:12,l2:10,f:12}],
+[{n:'75',s:1,l1:5,l2:2,f:3},{n:'92',s:2,l1:11,l2:7,f:7},{n:'94',s:3,l1:6,l2:9,f:1},{n:'96',s:4,l1:12,l2:1,f:4},{n:'97',s:5,l1:7,l2:3,f:2},{n:'98',s:8,l1:14,l2:8,f:11},{n:'99',s:11,l1:3,l2:14,f:5},{n:'300',s:14,l1:2,l2:12,f:10},{n:'2001',s:6,l1:13,l2:6,f:6},{n:'7',s:12,l1:1,l2:5,f:12},{n:'35',s:10,l1:10,l2:13,f:8},{n:'1',s:9,l1:9,l2:10,f:14},{n:'0 1/2',s:7,l1:8,l2:4,f:13},{n:'13',s:13,l1:4,l2:11,f:9}],
+[{n:'0 1/2',s:12,l1:14,l2:7,f:2},{n:'18',s:14,l1:13,l2:14,f:14},{n:'6',s:6,l1:3,l2:12,f:7},{n:'3',s:4,l1:6,l2:8,f:4},{n:'45',s:9,l1:7,l2:5,f:10},{n:'75',s:1,l1:1,l2:6,f:3},{n:'5',s:2,l1:5,l2:9,f:6},{n:'43',s:8,l1:9,l2:4,f:11},{n:'7',s:10,l1:4,l2:13,f:8},{n:'88',s:13,l1:12,l2:10,f:1},{n:'35',s:5,l1:11,l2:11,f:9},{n:'94',s:7,l1:8,l2:1,f:13},{n:'92',s:3,l1:2,l2:3,f:12},{n:'14',s:11,l1:10,l2:2,f:5}],
+[{n:'20',s:1,l1:2,l2:2,f:3},{n:'88',s:2,l1:1,l2:3,f:1},{n:'19',s:3,l1:3,l2:1,f:2},{n:'96',s:4,l1:8,l2:4,f:5},{n:'2001',s:5,l1:4,l2:10,f:6},{n:'90',s:6,l1:9,l2:8,f:11},{n:'9',s:7,l1:13,l2:12,f:14},{n:'97',s:8,l1:12,l2:5,f:4},{n:'40',s:9,l1:14,l2:11,f:12},{n:'64',s:10,l1:10,l2:13,f:13},{n:'26',s:11,l1:5,l2:9,f:9},{n:'0 1/2',s:12,l1:7,l2:7,f:8},{n:'24',s:13,l1:11,l2:6,f:7},{n:'10',s:14,l1:6,l2:14,f:10}],
+[{n:'27',s:1,l1:2,l2:11,f:9},{n:'46',s:2,l1:12,l2:8,f:8},{n:'2001',s:3,l1:6,l2:1,f:4},{n:'98',s:4,l1:8,l2:12,f:11},{n:'19',s:5,l1:11,l2:10,f:2},{n:'26',s:6,l1:1,l2:7,f:10},{n:'10',s:7,l1:13,l2:14,f:14},{n:'17',s:8,l1:9,l2:2,f:6},{n:'90',s:9,l1:15,l2:9,f:12},{n:'41',s:10,l1:10,l2:6,f:3},{n:'92',s:11,l1:3,l2:5,f:7},{n:'68',s:12,l1:4,l2:4,f:5},{n:'9',s:13,l1:7,l2:3,f:1},{n:'44',s:14,l1:14,l2:13,f:13}],
+[{n:'90',s:1,l1:10,l2:11,f:11},{n:'35',s:2,l1:13,l2:12,f:12},{n:'68',s:3,l1:11,l2:8,f:5},{n:'45',s:4,l1:4,l2:2,f:9},{n:'3',s:5,l1:9,l2:13,f:14},{n:'41',s:6,l1:5,l2:6,f:6},{n:'88',s:7,l1:3,l2:9,f:8},{n:'17',s:8,l1:1,l2:7,f:7},{n:'24',s:9,l1:2,l2:1,f:10},{n:'27',s:10,l1:12,l2:4,f:1},{n:'1',s:11,l1:8,l2:10,f:3},{n:'44',s:12,l1:14,l2:14,f:13},{n:'46',s:13,l1:6,l2:3,f:2},{n:'300',s:14,l1:7,l2:5,f:4}],
+[{n:'27',s:1,l1:2,l2:5,f:7},{n:'64',s:2,l1:3,l2:1,f:2},{n:'40',s:3,l1:11,l2:10,f:13},{n:'97',s:4,l1:8,l2:3,f:5},{n:'96',s:5,l1:9,l2:6,f:14},{n:'19',s:6,l1:6,l2:13,f:12},{n:'90',s:7,l1:12,l2:11,f:8},{n:'44',s:8,l1:1,l2:4,f:1},{n:'20',s:9,l1:5,l2:9,f:3},{n:'9',s:10,l1:13,l2:8,f:9},{n:'26',s:11,l1:14,l2:14,f:10},{n:'43',s:12,l1:7,l2:7,f:11},{n:'2001',s:13,l1:4,l2:2,f:6},{n:'10',s:14,l1:10,l2:12,f:4}],
+[{n:'45',s:14,l1:null,l2:null,f:2},{n:'68',s:5,l1:null,l2:null,f:4},{n:'2001',s:7,l1:null,l2:null,f:10},{n:'41',s:8,l1:null,l2:null,f:1},{n:'27',s:1,l1:null,l2:null,f:13},{n:'46',s:2,l1:null,l2:null,f:11},{n:'5',s:11,l1:null,l2:null,f:8},{n:'11',s:12,l1:null,l2:null,f:14},{n:'14',s:3,l1:null,l2:null,f:9},{n:'99',s:9,l1:null,l2:null,f:6},{n:'1',s:4,l1:null,l2:null,f:7},{n:'44',s:6,l1:null,l2:null,f:3},{n:'35',s:10,l1:null,l2:null,f:12},{n:'17',s:13,l1:null,l2:null,f:5}]
+];
+
 const SEED_CARS = ['0.5','1','2','03','3','4','5','6','07','7','8','9','10','11','13','14','15','16','17','18','19','20','21','22','23','24','26','27','28','31','33','34','35','36','40','41','43','44','45','46','47','64','66','68','70','75','88','90','92','94','96','97','98','99','300','2001'];
 
 const SEED_SCHEDULE = [
@@ -390,12 +425,36 @@ const SUPABASE_URL = "https://icbbcnksulieahxyywwh.supabase.co";      // e.g. ht
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImljYmJjbmtzdWxpZWFoeHl5d3doIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwODYxNzAsImV4cCI6MjA5ODY2MjE3MH0.GOANkeAvqGM_Htx9r1xFWMlT0gzzF-z0tXhPOSqg5wo";  // the long "anon public" key
 const LEAGUE_ID = "main";      // change if you ever run two leagues in one database
 
-let DB = null;
+let DB_ROOT = null;   // { schema, activeSeason, seasons:[...] }
 let sb = null;                 // supabase client (null if not configured)
 let saveTimer = null;
 let applyingRemote = false;    // guard so realtime echoes don't loop
 
 const CONFIGURED = SUPABASE_URL && SUPABASE_ANON_KEY;
+
+// ---- Season model ----
+// DB_ROOT holds all seasons. `DB` is a live proxy onto the ACTIVE season, so all
+// existing code that reads DB.cars / DB.races / DB.teams / DB.fights keeps working.
+function activeSeasonObj(){
+  return DB_ROOT.seasons.find(s=>s.id===DB_ROOT.activeSeason) || DB_ROOT.seasons[0];
+}
+const DB = new Proxy({}, {
+  get(_, prop){
+    const s = activeSeasonObj();
+    if(prop==='seasonsList') return DB_ROOT.seasons;
+    if(prop==='activeSeasonId') return DB_ROOT.activeSeason;
+    if(prop==='root') return DB_ROOT;
+    return s ? s[prop] : undefined;
+  },
+  set(_, prop, val){
+    const s = activeSeasonObj();
+    if(s) s[prop] = val;
+    return true;
+  }
+});
+function setActiveSeason(id){
+  if(DB_ROOT.seasons.some(s=>s.id===id)){ DB_ROOT.activeSeason=id; saveDB(); render(); }
+}
 
 /* ---------- storage layer ---------- */
 async function loadDB(){
@@ -404,46 +463,35 @@ async function loadDB(){
       sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       const {data, error} = await sb.from('leagues').select('data').eq('id', LEAGUE_ID).maybeSingle();
       if(error) throw error;
-      if(data && data.data){ DB = data.data; }
-      else { DB = seedDB(); await pushDB(); }   // first ever load → seed the shared row
+      if(data && data.data){ DB_ROOT = migrateToSeasons(data.data); }
+      else { DB_ROOT = seedRoot(); await pushDB(); }   // first ever load → seed the shared row
       subscribeRealtime();
       return;
     }catch(e){
       console.error(e);
       toast('Cloud connect failed — using local mode');
-      // fall through to local
     }
   }
-  // Local fallback (browser localStorage) — used when not configured or cloud failed
   try{
     const raw = localStorage.getItem('hwrs:v1');
-    if(raw){ DB = JSON.parse(raw); return; }
+    if(raw){ DB_ROOT = migrateToSeasons(JSON.parse(raw)); return; }
   }catch(e){}
-  DB = seedDB(); saveLocal();
+  DB_ROOT = seedRoot(); saveLocal();
 }
 
 function saveLocal(){
-  try{ localStorage.setItem('hwrs:v1', JSON.stringify(DB)); }catch(e){}
+  try{ localStorage.setItem('hwrs:v1', JSON.stringify(DB_ROOT)); }catch(e){}
 }
-
-// push the full DB up to Supabase (upsert single row)
 async function pushDB(){
   if(!sb) return;
-  const {error} = await sb.from('leagues').upsert({id:LEAGUE_ID, data:DB, updated_at:new Date().toISOString()});
+  const {error} = await sb.from('leagues').upsert({id:LEAGUE_ID, data:DB_ROOT, updated_at:new Date().toISOString()});
   if(error){ console.error(error); toast('Save failed — check connection'); }
 }
-
-// called everywhere after a change; debounced so rapid edits batch into one write
 async function saveDB(){
   saveLocal();
-  if(applyingRemote) return;            // don't rebroadcast a change we just received
-  if(sb){
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(pushDB, 400);
-  }
+  if(applyingRemote) return;
+  if(sb){ clearTimeout(saveTimer); saveTimer = setTimeout(pushDB, 400); }
 }
-
-// live sync: when the shared row changes, pull it in and re-render
 function subscribeRealtime(){
   if(!sb) return;
   sb.channel('league-'+LEAGUE_ID)
@@ -453,7 +501,7 @@ function subscribeRealtime(){
           const incoming = payload.new && payload.new.data;
           if(!incoming) return;
           applyingRemote = true;
-          DB = incoming;
+          DB_ROOT = migrateToSeasons(incoming);
           render();
           applyingRemote = false;
           setSyncDot(true);
@@ -470,8 +518,33 @@ function setSyncDot(flash){
   if(flash){ clearTimeout(el._t); el._t=setTimeout(()=>{ el.textContent='● live sync on'; },1800); }
 }
 
-function seedDB(){
-  const cars = SEED_CARS.map(n=>({num:n, team:'', active:true}));
+// Convert any older shape into the season structure. Idempotent.
+function migrateToSeasons(data){
+  if(data && data.schema>=2 && Array.isArray(data.seasons)) return data;  // already new
+  // Old flat shape { season, cars, races, teams, fights, regularCount, playoffCount }
+  const s2 = {
+    id:'S2', label:'Season 2', year:'2025–26', hasLaps:false,
+    regularCount: data.regularCount||28, playoffCount: data.playoffCount||4,
+    cars: data.cars||[], races: data.races||[], teams: data.teams||[], fights: data.fights||[]
+  };
+  return { schema:2, activeSeason:'S2', seasons:[ seedS1(), s2 ] };
+}
+
+// Build the 2024 season (S1) from imported race sheets.
+function seedS1(){
+  const cars = S1_CARS.map(n=>({num:n, team:'', active:true, driver:''}));
+  const races = S1_RACES.map((res,i)=>({
+    id:'s1r'+(i+1), name:'Race '+(i+1), type:'short', date:'', playoff:false,
+    entries: res.map(x=>x.n),
+    results: res.map(x=>({num:x.n, start:x.s, lap1:x.l1, lap2:x.l2, finish:x.f}))
+  }));
+  return { id:'S1', label:'Season 1', year:'2024', hasLaps:true,
+           regularCount:20, playoffCount:0,
+           cars, races, teams:[], fights:S1_FIGHTS.slice() };
+}
+
+function seedS2(){
+  const cars = SEED_CARS.map(n=>({num:n, team:'', active:true, driver:''}));
   const races = SEED_SCHEDULE.map((s,i)=>{
     const r = {id:'r'+(i+1), name:s.name, type:s.type, date:s.date, playoff:false,
                entries: SEED_ENTRIES[i] ? [...SEED_ENTRIES[i]] : [], results:null};
@@ -480,13 +553,49 @@ function seedDB(){
     }
     return r;
   });
+  return { id:'S2', label:'Season 2', year:'2025–26', hasLaps:false,
+           regularCount:28, playoffCount:4, teams:[], cars, races, fights:[] };
+}
+
+function seedRoot(){
+  return { schema:2, activeSeason:'S2', seasons:[ seedS1(), seedS2() ] };
+}
+
+// Career stats for a car across ALL seasons. Points are season-scoped, so career
+// points = sum of each season's points; other stats aggregate over all races.
+function careerStats(num){
+  const perSeason = [];
+  let cRaces=0, cWins=0, cStartSum=0, cStartCnt=0, cFinSum=0, cPts=0, cDiff=0, cTop=0;
+  DB_ROOT.seasons.forEach(season=>{
+    let pts=0, races=0, wins=0, startSum=0, startCnt=0, finSum=0, diff=0, best=null;
+    season.races.forEach(r=>{
+      if(!r.results) return;
+      const res = r.results.find(x=>x.num===num);
+      if(!res) return;
+      races++; finSum+=res.finish; pts+=pointsForFinish(res.finish);
+      if(res.finish===1) wins++;
+      if(res.start!=null){ startSum+=res.start; startCnt++; diff += (res.start-res.finish); }
+      if(best===null || res.finish<best) best=res.finish;
+    });
+    if(races>0){
+      perSeason.push({
+        id:season.id, label:season.label, year:season.year, hasLaps:season.hasLaps,
+        races, wins, pts, diff, best,
+        avgStart: startCnt? startSum/startCnt : null,
+        avgFinish: races? finSum/races : null
+      });
+      cRaces+=races; cWins+=wins; cPts+=pts; cDiff+=diff;
+      cStartSum+=startSum; cStartCnt+=startCnt; cFinSum+=finSum;
+    }
+  });
   return {
-    season:'2025–26',
-    regularCount:28,
-    playoffCount:4,
-    teams:[],   // list of team names; cars reference by name in car.team
-    cars, races,
-    fights:[]  // {winner, loser, tie:false}
+    perSeason,
+    career:{
+      races:cRaces, wins:cWins, pts:cPts, diff:cDiff,
+      avgStart: cStartCnt? cStartSum/cStartCnt : null,
+      avgFinish: cRaces? cFinSum/cRaces : null,
+      seasons: perSeason.length
+    }
   };
 }
 
@@ -660,7 +769,18 @@ function render(){
   if(!DB.teams) DB.teams = [];  // migrate older databases
   // Migrate teams from plain strings to {name,color} objects
   DB.teams = DB.teams.map((t,i)=> typeof t==='string' ? {name:t, color:TEAM_PALETTE[i%TEAM_PALETTE.length]} : t);
-  document.getElementById('seasonLabel').textContent = DB.season;
+  const _as = activeSeasonObj();
+  document.getElementById('seasonLabel').textContent = _as.label + ' · ' + _as.year;
+  // Season switcher
+  const ss = document.getElementById('seasonSwitch');
+  if(ss){
+    ss.innerHTML = DB_ROOT.seasons.map(s=>
+      `<button class="${s.id===DB_ROOT.activeSeason?'on':''}" data-season="${s.id}">${esc(s.label)}<small>${esc(s.year)}</small></button>`
+    ).join('');
+    ss.querySelectorAll('button[data-season]').forEach(b=>{
+      b.onclick=()=>{ driverDetailNum=null; setActiveSeason(b.dataset.season); };
+    });
+  }
   const scored = DB.races.filter(r=>r.results).length;
   document.getElementById('tagline').textContent =
     `${DB.cars.filter(c=>c.active).length} cars · ${scored} of ${DB.races.length} races scored · top 16 make the playoffs`;
@@ -1152,7 +1272,7 @@ function renderDriverDetail(num){
   ordered.forEach(({r,num:rn})=>{
     if(r.results){
       const res = r.results.find(x=>x.num===num);
-      if(res) results.push({raceNum:rn, name:r.name, type:r.type, date:r.date, start:res.start, finish:res.finish, pts:pointsForFinish(res.finish)});
+      if(res) results.push({raceNum:rn, name:r.name, type:r.type, date:r.date, start:res.start, lap1:res.lap1, lap2:res.lap2, finish:res.finish, pts:pointsForFinish(res.finish)});
     } else if(r.entries && r.entries.includes(num)){
       upcoming.push({raceNum:rn, name:r.name, type:r.type, date:r.date});
     }
@@ -1170,15 +1290,17 @@ function renderDriverDetail(num){
       <div class="stat" style="border-left-color:${col}"><div class="k">Differential</div><div class="v">${s.diff>0?'+':''}${s.diff}</div></div>
     </div>` : `<p class="lead" style="margin-top:16px">No races scored yet this season.</p>`;
 
+  const hasLaps = activeSeasonObj().hasLaps;
   const resultsTable = results.length ? `
     <div class="card" style="padding:6px 4px">
       <table class="data">
-        <thead><tr><th class="l">Rd</th><th class="l">Race</th><th class="l">Type</th><th>Start</th><th>Finish</th><th>Pts</th></tr></thead>
+        <thead><tr><th class="l">Rd</th><th class="l">Race</th><th class="l">Type</th><th>Start</th>${hasLaps?'<th>Lap 1</th><th>Lap 2</th>':''}<th>Finish</th><th>Pts</th></tr></thead>
         <tbody>${results.map(x=>`<tr>
           <td class="l pos">${x.raceNum}</td>
           <td class="l">${esc(x.name)}${x.date?`<br><span class="mini">${esc(x.date)}</span>`:''}</td>
           <td class="l">${typeChip(x.type)}</td>
           <td>${x.start??'—'}</td>
+          ${hasLaps?`<td>${x.lap1??'—'}</td><td>${x.lap2??'—'}</td>`:''}
           <td>${finBadge(x.finish)}</td>
           <td class="pts">${x.pts}</td>
         </tr>`).join('')}</tbody>
@@ -1198,6 +1320,37 @@ function renderDriverDetail(num){
       </table>
     </div>` : `<p class="mini">Not entered in any upcoming races yet.</p>`;
 
+  // Career section — aggregate across all seasons (ESPN-style).
+  const cs = careerStats(num);
+  const careerSection = cs.career.races>0 ? `
+    <h2 class="sec" style="font-size:20px;margin:30px 0 10px">Career</h2>
+    <div class="stat-cards">
+      <div class="stat" style="border-left-color:${col}"><div class="k">Seasons</div><div class="v">${cs.career.seasons}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Career Races</div><div class="v">${cs.career.races}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Career Wins</div><div class="v">${cs.career.wins}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Career Points</div><div class="v">${cs.career.pts}</div></div>
+      <div class="stat" style="border-left-color:${col}"><div class="k">Career Avg Fin</div><div class="v">${fmt(cs.career.avgFinish)}</div></div>
+    </div>
+    <div class="card" style="padding:6px 4px;margin-top:6px">
+      <table class="data">
+        <thead><tr><th class="l">Season</th><th>Races</th><th>Wins</th><th>Pts</th><th class="hide-sm">Avg St</th><th>Avg Fin</th><th>Best</th><th class="hide-sm">Diff</th></tr></thead>
+        <tbody>${cs.perSeason.map(ps=>`<tr>
+          <td class="l"><strong>${esc(ps.label)}</strong> <span class="mini">${esc(ps.year)}</span></td>
+          <td>${ps.races}</td><td>${ps.wins}</td><td class="pts">${ps.pts}</td>
+          <td class="hide-sm">${fmt(ps.avgStart)}</td><td>${fmt(ps.avgFinish)}</td>
+          <td>${ps.best!=null?finBadge(ps.best):'—'}</td>
+          <td class="hide-sm">${ps.diff>0?'+':''}${ps.diff}</td>
+        </tr>`).join('')}
+        <tr style="border-top:2px solid var(--flag)">
+          <td class="l"><strong>Career</strong></td>
+          <td>${cs.career.races}</td><td>${cs.career.wins}</td><td class="pts">${cs.career.pts}</td>
+          <td class="hide-sm">${fmt(cs.career.avgStart)}</td><td>${fmt(cs.career.avgFinish)}</td>
+          <td>—</td><td class="hide-sm">${cs.career.diff>0?'+':''}${cs.career.diff}</td>
+        </tr>
+        </tbody>
+      </table>
+    </div>` : '';
+
   view.innerHTML = `
     <button class="dd-back" id="ddBack">← Back to roster</button>
     <div class="dd-head" style="margin-top:6px">
@@ -1206,16 +1359,18 @@ function renderDriverDetail(num){
         ${logoImg(num,44)}
         <div>
           <h2>${driver? esc(driver) : 'Unnamed Driver'}</h2>
-          <div class="mini" style="margin-top:4px">${team? `<span class="carno-pill" style="border-color:${col};color:${col}">${esc(team)}</span>`:'No team assigned'} · ${DB.season} season</div>
+          <div class="mini" style="margin-top:4px">${team? `<span class="carno-pill" style="border-color:${col};color:${col}">${esc(team)}</span>`:'No team assigned'} · Viewing ${esc(activeSeasonObj().label)} (${esc(activeSeasonObj().year)})</div>
         </div>
       </div>
     </div>
+    ${careerSection}
+    <h2 class="sec" style="font-size:20px;margin:30px 0 10px">${esc(activeSeasonObj().label)} Results <span class="mini" style="font-style:normal">${esc(activeSeasonObj().year)}</span></h2>
     ${statChips}
-    <h2 class="sec" style="font-size:20px;margin:26px 0 10px">2026 Results</h2>
+    <div style="margin-top:12px"></div>
     ${resultsTable}
+    ${activeSeasonObj().races.some(r=>!r.results && r.entries && r.entries.includes(num)) ? `
     <h2 class="sec" style="font-size:20px;margin:26px 0 10px">Upcoming Races</h2>
-    ${upcomingList}
-    <p class="mini" style="margin-top:18px">Career stats across seasons (incl. 2024) will appear here once historical data is imported.</p>
+    ${upcomingList}` : ''}
   `;
 
   document.getElementById('ddBack').onclick=()=>{
@@ -1461,10 +1616,10 @@ function renderData(){
       r.results.forEach(x=> csv+=`${i+1},"${r.name}",${r.type},${r.playoff?'Y':'N'},${x.num},${x.start??''},${x.finish},${pointsForFinish(x.finish)}\n`); });
     dl('HWRS_AllRaces.csv',csv); toast('Races exported');
   };
-  document.getElementById('expJson').onclick=()=>{ dl('HWRS_backup.json',JSON.stringify(DB,null,2),'application/json'); toast('Backup downloaded'); };
+  document.getElementById('expJson').onclick=()=>{ dl('HWRS_backup.json',JSON.stringify(DB_ROOT,null,2),'application/json'); toast('Full backup downloaded (all seasons)'); };
   document.getElementById('impFile').onchange=e=>{
     const f=e.target.files[0]; if(!f) return;
-    const rd=new FileReader(); rd.onload=()=>{ try{ DB=JSON.parse(rd.result); saveDB(); render(); toast('League restored'); }catch(err){ toast('Invalid backup file'); } };
+    const rd=new FileReader(); rd.onload=()=>{ try{ DB_ROOT=migrateToSeasons(JSON.parse(rd.result)); saveDB(); render(); toast('League restored'); }catch(err){ toast('Invalid backup file'); } };
     rd.readAsText(f);
   };
   document.getElementById('clearResultsBtn').onclick=()=>{
@@ -1474,7 +1629,7 @@ function renderData(){
       saveDB(); render(); toast('All results cleared');
     }
   };
-  document.getElementById('resetBtn').onclick=()=>{ if(confirm('Reset all data to the original seed?')){ DB=seedDB(); saveDB(); render(); toast('Reset complete'); } };
+  document.getElementById('resetBtn').onclick=()=>{ if(confirm('Reset ALL seasons to the original seed data (2024 + 2025-26)? This replaces everything.')){ DB_ROOT=seedRoot(); saveDB(); render(); toast('Reset complete'); } };
 }
 
 /* ---------- boot ---------- */
