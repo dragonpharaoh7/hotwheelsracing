@@ -54,6 +54,12 @@
   .season-switch button:hover{color:var(--ink);border-color:var(--steel)}
   .season-switch button.on{background:var(--flag);color:#fff;border-color:var(--flag)}
   .season-switch button.on small{opacity:.9}
+  .champ-banner{display:flex;align-items:center;gap:14px;background:linear-gradient(100deg,rgba(245,197,24,.16),rgba(245,197,24,.04));
+    border:1px solid rgba(245,197,24,.4);border-left:4px solid var(--gold);border-radius:8px;padding:14px 18px;margin-bottom:18px}
+  .champ-banner .trophy{font-size:26px;font-style:normal}
+  .champ-banner .champ-k{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold)}
+  .champ-banner .champ-v{font-family:var(--disp);font-style:italic;font-weight:800;font-size:20px;margin-top:2px;color:#fff}
+  .champ-banner .champ-v a{color:#fff}
   .team-logo{border-radius:4px;object-fit:cover;vertical-align:middle;flex:none;background:#fff;border:1px solid var(--line2)}
   .logo-ph{width:28px;height:28px;border-radius:4px;border:1.5px dashed;display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:12px;flex:none;opacity:.6}
   .carno-cell{display:inline-flex;align-items:center;gap:8px}
@@ -337,6 +343,13 @@ function downscaleImage(file, maxpx, cb){
 }
 
 // ===== 2024 season (S1) imported from Hotwheel Stats 2024.xlsx race sheets =====
+const S1_PLAYOFF_CARS=['88','2001','24','0 1/2','6','68','41','92','43','44','45','20','97','75'];
+const S1_PLAYOFF_RACES=[
+[{n:'88',f:5},{n:'2001',f:5},{n:'24',f:7},{n:'0 1/2',f:12},{n:'6',f:11},{n:'68',f:13},{n:'41',f:8},{n:'92',f:13},{n:'43',f:2},{n:'44',f:9},{n:'45',f:11},{n:'20',f:6},{n:'97',f:14},{n:'75',f:10}],
+[{n:'88',f:4},{n:'2001',f:1},{n:'24',f:7},{n:'0 1/2',f:4},{n:'6',f:3},{n:'68',f:1},{n:'41',f:8},{n:'92',f:6},{n:'43',f:10},{n:'44',f:3},{n:'45',f:2},{n:'20',f:14},{n:'97',f:9},{n:'75',f:12}],
+[{n:'88',f:1},{n:'2001',f:10},{n:'24',f:4},{n:'0 1/2',f:2},{n:'6',f:5},{n:'68',f:7},{n:'41',f:6},{n:'92',f:3},{n:'43',f:11},{n:'44',f:13},{n:'45',f:12},{n:'20',f:10},{n:'97',f:9},{n:'75',f:14}]
+];
+
 const S1_CARS=['1','3','5','6','7','9','10','11','13','14','17','18','19','20','21','24','26','27','35','40','41','43','44','45','46','64','68','75','88','90','92','94','96','97','98','99','300','2001','0 1/2'];
 const S1_FIGHTS=[{winner:'64',loser:'41',tie:false},{winner:'64',loser:'98',tie:false},{winner:'64',loser:'0 1/2',tie:false},{winner:'21',loser:'64',tie:false},{winner:'0 1/2',loser:'18',tie:false},{winner:'64',loser:'40',tie:false},{winner:'94',loser:'13',tie:false},{winner:'7',loser:'26',tie:false},{winner:'9',loser:'1',tie:false},{winner:'20',loser:'9',tie:false},{winner:'64',loser:'40',tie:false},{winner:'92',loser:'0 1/2',tie:false},{winner:'24',loser:'45',tie:false},{winner:'45',loser:'41',tie:false}];
 const S1_RACES=[
@@ -518,43 +531,100 @@ function setSyncDot(flash){
   if(flash){ clearTimeout(el._t); el._t=setTimeout(()=>{ el.textContent='● live sync on'; },1800); }
 }
 
+// Canonical car-number aliases. 0 1/2 and 0.5 are the SAME car; 07≠7 and 03≠3 stay distinct.
+const CAR_ALIASES = { '0.5':'0 1/2' };
+function canonNum(n){ return CAR_ALIASES[n] || n; }
+// Rewrite every car number in a season to its canonical form (idempotent).
+function normalizeSeasonNums(season){
+  (season.cars||[]).forEach(c=>{ c.num = canonNum(c.num); });
+  (season.races||[]).forEach(r=>{
+    if(r.phase==null) r.phase = r.playoff ? 'playoff' : 'regular';   // migrate old boolean
+    if(r.entries) r.entries = r.entries.map(canonNum);
+    if(r.results) r.results.forEach(x=>{ x.num = canonNum(x.num); });
+  });
+  (season.fights||[]).forEach(f=>{ f.winner=canonNum(f.winner); f.loser=canonNum(f.loser); });
+  // metric defaults for older season objects
+  if(!season.regularMetric) season.regularMetric = (season.id==='S1') ? 'avgFinish' : 'points';
+  if(!season.playoffMetric) season.playoffMetric = season.regularMetric;
+  if(season.playoffComplete==null) season.playoffComplete = (season.id==='S1');
+  return season;
+}
+
 // Convert any older shape into the season structure. Idempotent.
 function migrateToSeasons(data){
-  if(data && data.schema>=2 && Array.isArray(data.seasons)) return data;  // already new
-  // Old flat shape { season, cars, races, teams, fights, regularCount, playoffCount }
-  const s2 = {
-    id:'S2', label:'Season 2', year:'2025–26', hasLaps:false,
-    regularCount: data.regularCount||28, playoffCount: data.playoffCount||4,
-    cars: data.cars||[], races: data.races||[], teams: data.teams||[], fights: data.fights||[]
-  };
-  return { schema:2, activeSeason:'S2', seasons:[ seedS1(), s2 ] };
+  let root;
+  if(data && data.schema>=2 && Array.isArray(data.seasons)){ root = data; }
+  else {
+    const s2 = {
+      id:'S2', label:'Season 2', year:'2025–26', hasLaps:false,
+      regularCount: data.regularCount||28, playoffCount: data.playoffCount||4,
+      cars: data.cars||[], races: data.races||[], teams: data.teams||[], fights: data.fights||[]
+    };
+    root = { schema:2, activeSeason:'S2', seasons:[ seedS1(), s2 ] };
+  }
+  // Normalize car numbers + propagate league-wide driver names every load.
+  root.seasons.forEach(normalizeSeasonNums);
+  applyLeagueDrivers(root);
+  return root;
+}
+
+// Driver names are league-wide (keyed by canonical car number). We keep a root-level
+// map and mirror it onto each season's car rows so all existing per-season code works.
+function applyLeagueDrivers(root){
+  if(!root.drivers) root.drivers = {};   // { canonicalNum: "Driver Name" }
+  // Seed the map from any existing per-car driver names (first non-empty wins).
+  root.seasons.forEach(s=> (s.cars||[]).forEach(c=>{
+    if(c.driver && !root.drivers[c.num]) root.drivers[c.num] = c.driver;
+  }));
+  // Mirror back onto every season's car rows.
+  root.seasons.forEach(s=> (s.cars||[]).forEach(c=>{
+    if(root.drivers[c.num]) c.driver = root.drivers[c.num];
+  }));
+}
+// Set a driver name league-wide and re-mirror.
+function setDriverName(num, name){
+  const n = canonNum(num);
+  if(!DB_ROOT.drivers) DB_ROOT.drivers = {};
+  if(name) DB_ROOT.drivers[n] = name; else delete DB_ROOT.drivers[n];
+  DB_ROOT.seasons.forEach(s=> (s.cars||[]).forEach(c=>{ if(c.num===n) c.driver = name; }));
 }
 
 // Build the 2024 season (S1) from imported race sheets.
 function seedS1(){
-  const cars = S1_CARS.map(n=>({num:n, team:'', active:true, driver:''}));
+  const cars = S1_CARS.map(n=>({num:canonNum(n), team:'', active:true, driver:''}));
   const races = S1_RACES.map((res,i)=>({
-    id:'s1r'+(i+1), name:'Race '+(i+1), type:'short', date:'', playoff:false,
-    entries: res.map(x=>x.n),
-    results: res.map(x=>({num:x.n, start:x.s, lap1:x.l1, lap2:x.l2, finish:x.f}))
+    id:'s1r'+(i+1), name:'Race '+(i+1), type:'short', date:'', phase:'regular',
+    entries: res.map(x=>canonNum(x.n)),
+    results: res.map(x=>({num:canonNum(x.n), start:x.s, lap1:x.l1, lap2:x.l2, finish:x.f}))
   }));
+  // 3 playoff races (finish-only), champion by average finish.
+  S1_PLAYOFF_RACES.forEach((res,i)=>{
+    races.push({
+      id:'s1po'+(i+1), name:'Playoff Race '+(i+1), type:'short', date:'', phase:'playoff',
+      entries: res.map(x=>canonNum(x.n)),
+      results: res.map(x=>({num:canonNum(x.n), start:null, lap1:null, lap2:null, finish:x.f}))
+    });
+  });
   return { id:'S1', label:'Season 1', year:'2024', hasLaps:true,
-           regularCount:20, playoffCount:0,
-           cars, races, teams:[], fights:S1_FIGHTS.slice() };
+           regularMetric:'avgFinish', playoffMetric:'avgFinish',
+           regularCount:20, playoffCount:3, playoffComplete:true,
+           cars, races, teams:[], fights:S1_FIGHTS.map(f=>({winner:canonNum(f.winner),loser:canonNum(f.loser),tie:f.tie})) };
 }
 
 function seedS2(){
-  const cars = SEED_CARS.map(n=>({num:n, team:'', active:true, driver:''}));
+  const cars = SEED_CARS.map(n=>({num:canonNum(n), team:'', active:true, driver:''}));
   const races = SEED_SCHEDULE.map((s,i)=>{
-    const r = {id:'r'+(i+1), name:s.name, type:s.type, date:s.date, playoff:false,
-               entries: SEED_ENTRIES[i] ? [...SEED_ENTRIES[i]] : [], results:null};
+    const r = {id:'r'+(i+1), name:s.name, type:s.type, date:s.date, phase:'regular',
+               entries: SEED_ENTRIES[i] ? SEED_ENTRIES[i].map(canonNum) : [], results:null};
     if(i < SEED_RESULTS.length){
-      r.results = SEED_RESULTS[i].map(x=>({num:x.num, start:x.start, finish:x.finish}));
+      r.results = SEED_RESULTS[i].map(x=>({num:canonNum(x.num), start:x.start, finish:x.finish}));
     }
     return r;
   });
   return { id:'S2', label:'Season 2', year:'2025–26', hasLaps:false,
-           regularCount:28, playoffCount:4, teams:[], cars, races, fights:[] };
+           regularMetric:'points', playoffMetric:'points',
+           regularCount:28, playoffCount:4, playoffComplete:false,
+           teams:[], cars, races, fights:[] };
 }
 
 function seedRoot(){
@@ -642,7 +712,7 @@ function suggestNextRace(){
 }
 
 function computeStandings(opts={}){
-  const {playoffOnly=false, regularOnly=false} = opts;
+  const {playoffOnly=false, regularOnly=false, metric=null} = opts;
   const map = {}; // num -> agg
   function ensure(num){
     if(!map[num]) map[num]={num, pts:0, races:0, wins:0, startSum:0, startCnt:0, finSum:0, top16:0};
@@ -650,8 +720,9 @@ function computeStandings(opts={}){
   }
   for(const r of DB.races){
     if(!r.results) continue;
-    if(playoffOnly && !r.playoff) continue;
-    if(regularOnly && r.playoff) continue;
+    const isPlayoff = r.phase==='playoff';
+    if(playoffOnly && !isPlayoff) continue;
+    if(regularOnly && isPlayoff) continue;
     for(const res of r.results){
       const a = ensure(res.num);
       a.pts += pointsForFinish(res.finish);
@@ -668,8 +739,38 @@ function computeStandings(opts={}){
     avgFinish: a.races ? a.finSum/a.races : null,
     diff: (a.startCnt ? a.startSum : 0) - a.finSum // start - finish summed (positive = gained)
   }));
-  rows.sort((x,y)=> y.pts - x.pts || y.diff - x.diff || y.wins - x.wins || (x.avgFinish??99) - (y.avgFinish??99));
+  // Rank metric: 'points' (sum, higher better) or 'avgFinish' (rate, lower better).
+  const useMetric = metric || (activeSeasonObj() ? activeSeasonObj().regularMetric : 'points');
+  if(useMetric==='avgFinish'){
+    rows.sort((x,y)=> (x.avgFinish??99) - (y.avgFinish??99) || y.wins - x.wins || y.diff - x.diff);
+  } else {
+    rows.sort((x,y)=> y.pts - x.pts || y.diff - x.diff || y.wins - x.wins || (x.avgFinish??99) - (y.avgFinish??99));
+  }
   return rows;
+}
+
+// Does the active season have any playoff races?
+function seasonHasPlayoffs(){ return DB.races.some(r=>r.phase==='playoff'); }
+// Are all regular-season races scored (i.e., playoffs may begin)?
+function regularSeasonComplete(){
+  const reg = DB.races.filter(r=>r.phase==='regular');
+  return reg.length>0 && reg.every(r=>r.results);
+}
+// Standings for a given phase, ranked by that phase's metric.
+function phaseStandings(phase){
+  const s = activeSeasonObj();
+  const metric = phase==='playoff' ? s.playoffMetric : s.regularMetric;
+  return computeStandings(phase==='playoff' ? {playoffOnly:true, metric} : {regularOnly:true, metric});
+}
+// The champion (or provisional leader) for the active season, or null if not applicable.
+function seasonChampion(){
+  const s = activeSeasonObj();
+  if(!seasonHasPlayoffs()) return null;
+  const anyPlayoffScored = DB.races.some(r=>r.phase==='playoff' && r.results);
+  if(!anyPlayoffScored) return null;
+  const rows = phaseStandings('playoff');
+  if(!rows.length) return null;
+  return { num: rows[0].num, provisional: !s.playoffComplete, metric: s.playoffMetric, row: rows[0] };
 }
 
 /* ---------- playoff projection (Monte Carlo, runs in-browser) ----------
@@ -795,19 +896,26 @@ function render(){
 }
 
 /* ===== STANDINGS ===== */
-let standingsScope = 'overall';
+let standingsPhase = 'regular';   // 'regular' | 'playoff'
 function renderStandings(){
-  const rows = computeStandings(
-    standingsScope==='playoff' ? {playoffOnly:true} :
-    standingsScope==='regular' ? {regularOnly:true} : {}
-  );
-  // apply sort
+  const season = activeSeasonObj();
+  const hasPO = seasonHasPlayoffs();
+  const poVisible = hasPO && (season.id!=='S2' || regularSeasonComplete());  // S2 playoffs hidden until reg season done
+  if(standingsPhase==='playoff' && !poVisible) standingsPhase='regular';
+
+  const metric = standingsPhase==='playoff' ? season.playoffMetric : season.regularMetric;
+  const byPoints = metric==='points';
+  const rows = phaseStandings(standingsPhase);
+
+  // sort (respect metric default; column clicks override)
   const k = sortState.key, dir = sortState.dir;
-  // Canonical tiebreak chain: points → differential → wins → avg finish.
-  function tiebreak(a,b){ return b.pts-a.pts || b.diff-a.diff || b.wins-a.wins || (a.avgFinish??99)-(b.avgFinish??99); }
-  // Default view (sorted by points, descending) uses the full canonical chain.
-  // Clicking another column sorts by that column, then falls back to the chain.
-  const isDefault = (k==='pts' && dir===-1);
+  function tiebreak(a,b){
+    return byPoints
+      ? (b.pts-a.pts || b.diff-a.diff || b.wins-a.wins || (a.avgFinish??99)-(b.avgFinish??99))
+      : ((a.avgFinish??99)-(b.avgFinish??99) || b.wins-a.wins || b.diff-a.diff);
+  }
+  const defaultKey = byPoints ? 'pts' : 'avgFinish';
+  const isDefault = (k===defaultKey && (byPoints? dir===-1 : dir===1)) || k==='pts' && byPoints;
   const sorted = isDefault ? [...rows].sort(tiebreak) : [...rows].sort((a,b)=>{
     let av=a[k], bv=b[k];
     if(av==null) av = dir<0? -Infinity: Infinity;
@@ -815,35 +923,46 @@ function renderStandings(){
     return (av<bv?-1:av>bv?1:0)*dir || tiebreak(a,b);
   });
 
-  // Leader readout always reflects the true points ranking, never the table's current sort.
-  const leader = rows[0];
   const totalRaces = DB.races.filter(r=>r.results).length;
+  const regRaces = DB.races.filter(r=>r.phase==='regular');
+  const regScored = regRaces.filter(r=>r.results).length;
 
-  // Playoff projection — only meaningful in overall scope with races left and some data
+  // Monte-Carlo projection only for points-based regular season with races left
   let proj = null;
-  const anyScored = totalRaces>0;
-  const racesLeft = DB.races.filter(r=>!r.results).length;
-  if(standingsScope==='overall' && anyScored && racesLeft>0){
+  if(standingsPhase==='regular' && byPoints && regScored>0 && regScored<regRaces.length){
     proj = simulatePlayoffs(3000);
   }
 
-  const scopeToggle = `
-    <div class="pill-toggle" role="group" aria-label="Standings scope">
-      ${['overall','regular','playoff'].map(s=>
-        `<button class="${standingsScope===s?'on':''}" data-scope="${s}">${s}</button>`).join('')}
-    </div>`;
+  const phaseToggle = poVisible ? `
+    <div class="pill-toggle" role="group" aria-label="Season phase">
+      <button class="${standingsPhase==='regular'?'on':''}" data-phase="regular">Regular season</button>
+      <button class="${standingsPhase==='playoff'?'on':''}" data-phase="playoff">Playoffs</button>
+    </div>` : '';
 
+  // Champion / provisional banner (playoff view only)
+  const champ = seasonChampion();
+  const champBanner = (standingsPhase==='playoff' && champ) ? `
+    <div class="champ-banner">
+      <i class="trophy">🏆</i>
+      <div>
+        <div class="champ-k">${champ.provisional? 'Provisional Leader':'Champion'} · ${esc(season.label)} (${esc(season.year)})</div>
+        <div class="champ-v">${carLink(champ.num,'carlink')}${carDriver(champ.num)?` — ${esc(carDriver(champ.num))}`:''} · ${champ.metric==='avgFinish'? 'avg finish '+fmt(champ.row.avgFinish) : champ.row.pts+' pts'}</div>
+      </div>
+    </div>` : '';
+
+  const th = (key,label,cls='')=>`<th class="sortable ${cls}" data-sort="${key}">${label}${sortState.key===key?` <span class="ar">${sortState.dir<0?'▼':'▲'}</span>`:''}</th>`;
+
+  // Stat cards differ by metric
+  const leader = rows[0];
   const statCards = leader ? `
     <div class="stat-cards">
-      <div class="stat"><div class="k">Points Leader</div><div class="v">${carLink(leader.num,'carlink')}</div></div>
-      <div class="stat"><div class="k">Leader Points</div><div class="v">${leader.pts}</div></div>
-      <div class="stat"><div class="k">Races Scored</div><div class="v">${totalRaces}<small> / ${DB.races.length}</small></div></div>
+      <div class="stat"><div class="k">${byPoints?'Points Leader':'Best Avg Finish'}</div><div class="v">${carLink(leader.num,'carlink')}</div></div>
+      <div class="stat"><div class="k">${byPoints?'Leader Points':'Avg Finish'}</div><div class="v">${byPoints? leader.pts : fmt(leader.avgFinish)}</div></div>
+      <div class="stat"><div class="k">${standingsPhase==='playoff'?'Playoff Races':'Races Scored'}</div><div class="v">${standingsPhase==='playoff'? DB.races.filter(r=>r.phase==='playoff'&&r.results).length : regScored}<small> / ${standingsPhase==='playoff'? DB.races.filter(r=>r.phase==='playoff').length : regRaces.length}</small></div></div>
       ${proj
         ? `<div class="stat"><div class="k">Projected Cutoff</div><div class="v">${proj.projectedCutoff}<small> pts · ${proj.racesLeft} left</small></div></div>`
         : `<div class="stat"><div class="k">Most Wins</div><div class="v">${carLink([...rows].sort((a,b)=>b.wins-a.wins)[0]?.num||'—','carlink')} <small>${[...rows].sort((a,b)=>b.wins-a.wins)[0]?.wins||0}W</small></div></div>`}
     </div>` : '';
-
-  const th = (key,label,cls='')=>`<th class="sortable ${cls}" data-sort="${key}">${label}${sortState.key===key?` <span class="ar">${sortState.dir<0?'▼':'▲'}</span>`:''}</th>`;
 
   function oddsCell(num){
     if(!proj) return '';
@@ -854,53 +973,79 @@ function renderStandings(){
     return `<td class="hide-sm" style="color:${col};font-weight:600">${pct}</td>`;
   }
 
-  let bodyRows = '';
-  sorted.forEach((r,i)=>{
-    const cutline = (i===15 && sorted.length>16) ? ' cutline' : '';
-    bodyRows += `<tr class="${cutline}">
-      <td class="pos">${i+1}</td>
-      <td class="l"><span class="carno-cell">${logoImg(r.num)}<span>${carLink(r.num)}${r.wins?`<span class="win-badge">${r.wins}W</span>`:''}${carDriver(r.num)?`<br><span class="driver-name">${esc(carDriver(r.num))}</span>`:''}</span></span></td>
-      <td class="pts">${r.pts}</td>
-      <td>${r.races}</td>
-      <td class="hide-sm">${r.wins}</td>
-      <td class="hide-sm">${fmt(r.avgStart)}</td>
-      <td>${fmt(r.avgFinish)}</td>
-      <td>${r.diff>0?'+':''}${r.diff}</td>
-      ${oddsCell(r.num)}
+  // Playoff view for avgFinish seasons shows per-race finishes (Race 1/2/3) + Avg
+  const isAvgPlayoff = standingsPhase==='playoff' && !byPoints;
+  const poRaces = isAvgPlayoff ? DB.races.filter(r=>r.phase==='playoff' && r.results) : [];
+  function poFinishes(num){
+    return poRaces.map(r=>{ const res=r.results.find(x=>x.num===num); return res? res.finish : '—'; });
+  }
+
+  let head, bodyRows='';
+  if(isAvgPlayoff){
+    head = `<tr><th class="l" style="width:34px">#</th><th class="l">Car</th>
+      ${poRaces.map((r,i)=>`<th>R${i+1}</th>`).join('')}
+      <th>Avg</th></tr>`;
+    sorted.forEach((r,i)=>{
+      const champRow = i===0 ? ' style="background:rgba(245,197,24,.12)"':'';
+      bodyRows += `<tr${champRow}>
+        <td class="pos">${i===0? '🏆' : i+1}</td>
+        <td class="l"><span class="carno-cell">${logoImg(r.num)}<span>${carLink(r.num)}${carDriver(r.num)?`<br><span class="driver-name">${esc(carDriver(r.num))}</span>`:''}</span></span></td>
+        ${poFinishes(r.num).map(f=>`<td>${f===1?`<span class="fin-badge fin-1">1</span>`:f}</td>`).join('')}
+        <td class="pts">${fmt(r.avgFinish)}</td>
+      </tr>`;
+    });
+  } else {
+    head = `<tr>
+      <th class="l" style="width:34px">#</th><th class="l">Car</th>
+      ${byPoints? th('pts','Pts') : ''}
+      ${th('races','Races')}
+      ${th('wins','Wins','hide-sm')}
+      ${th('avgStart','Avg St','hide-sm')}
+      ${th('avgFinish','Avg Fin')}
+      ${th('diff','Diff')}
+      ${proj?`<th class="hide-sm l" title="Simulated chance of finishing top 16">Playoff %</th>`:''}
     </tr>`;
-    if(i===15 && sorted.length>16){
-      bodyRows += `<tr><td colspan="${proj?9:8}" style="text-align:center;padding:4px 0"><span class="cutlabel">— playoff cut line · top 16 —</span></td></tr>`;
-    }
-  });
+    const showCut = standingsPhase==='regular' && byPoints;
+    sorted.forEach((r,i)=>{
+      const cutline = (showCut && i===15 && sorted.length>16) ? ' cutline' : '';
+      bodyRows += `<tr class="${cutline}">
+        <td class="pos">${i+1}</td>
+        <td class="l"><span class="carno-cell">${logoImg(r.num)}<span>${carLink(r.num)}${r.wins?`<span class="win-badge">${r.wins}W</span>`:''}${carDriver(r.num)?`<br><span class="driver-name">${esc(carDriver(r.num))}</span>`:''}</span></span></td>
+        ${byPoints?`<td class="pts">${r.pts}</td>`:''}
+        <td>${r.races}</td>
+        <td class="hide-sm">${r.wins}</td>
+        <td class="hide-sm">${fmt(r.avgStart)}</td>
+        <td>${fmt(r.avgFinish)}</td>
+        <td>${r.diff>0?'+':''}${r.diff}</td>
+        ${oddsCell(r.num)}
+      </tr>`;
+      if(showCut && i===15 && sorted.length>16){
+        const span = 6 + (byPoints?1:0) + (proj?1:0);
+        bodyRows += `<tr><td colspan="${span}" style="text-align:center;padding:4px 0"><span class="cutlabel">— playoff cut line · top 16 —</span></td></tr>`;
+      }
+    });
+  }
+
+  const metricNote = byPoints
+    ? 'Ranked by points. Ties broken by differential.'
+    : 'Ranked by average finish (lowest wins) — this season used no points.';
 
   view.innerHTML = `
     <div class="flex-head">
       <div>
         <h2 class="sec">Standings</h2>
-        <p class="lead" style="margin:0">Auto-calculated from every scored race. Ties broken by differential. Click any column to sort.</p>
+        <p class="lead" style="margin:0">${metricNote}${standingsPhase==='playoff'&&!byPoints?' Playoff champion = lowest average across the playoff races.':''}</p>
       </div>
-      ${scopeToggle}
+      ${phaseToggle}
     </div>
+    ${champBanner}
     ${statCards}
     ${sorted.length? `
     <div class="card" style="padding:6px 4px">
-      <table class="data">
-        <thead><tr>
-          <th class="l" style="width:34px">#</th>
-          <th class="l">Car</th>
-          ${th('pts','Pts')}
-          ${th('races','Races')}
-          ${th('wins','Wins','hide-sm')}
-          ${th('avgStart','Avg St','hide-sm')}
-          ${th('avgFinish','Avg Fin')}
-          ${th('diff','Diff')}
-          ${proj?`<th class="hide-sm l" title="Simulated chance of finishing top 16">Playoff %</th>`:''}
-        </tr></thead>
-        <tbody>${bodyRows}</tbody>
-      </table>
+      <table class="data"><thead>${head}</thead><tbody>${bodyRows}</tbody></table>
     </div>
-    ${proj?`<p class="mini" style="margin-top:10px">Playoff % and projected cutoff come from ${proj.iters.toLocaleString()} simulations of the ${proj.racesLeft} remaining race${proj.racesLeft===1?'':'s'}, weighting each car by its current form. Estimates shift as more races are scored.</p>`:''}
-    ` : `<div class="empty"><i>🏁</i>No races scored yet. Head to <strong>Enter Race</strong> to log your first result.</div>`}
+    ${proj?`<p class="mini" style="margin-top:10px">Playoff % and projected cutoff come from ${proj.iters.toLocaleString()} simulations of the ${proj.racesLeft} remaining regular-season race${proj.racesLeft===1?'':'s'}, weighting each car by current form.</p>`:''}
+    ` : `<div class="empty"><i>🏁</i>${standingsPhase==='playoff'?'No playoff races scored yet.':'No races scored yet. Head to <strong>Enter Race</strong> to log your first result.'}</div>`}
   `;
 
   view.querySelectorAll('th.sortable').forEach(th=>{
@@ -911,9 +1056,10 @@ function renderStandings(){
       renderStandings();
     };
   });
-  view.querySelectorAll('[data-scope]').forEach(b=>{
-    b.onclick=()=>{ standingsScope=b.dataset.scope; renderStandings(); };
+  view.querySelectorAll('[data-phase]').forEach(b=>{
+    b.onclick=()=>{ standingsPhase=b.dataset.phase; sortState={key:'pts',dir:-1}; renderStandings(); bindCarLinks(); };
   });
+  bindCarLinks();
 }
 
 /* ===== SCHEDULE ===== */
@@ -932,7 +1078,7 @@ function renderSchedule(){
         </select>
       </td>
       <td class="l"><input type="date" data-f="date" data-id="${r.id}" value="${esc(r.date||'')}"></td>
-      <td class="l"><label class="mini" style="cursor:pointer"><input type="checkbox" data-f="playoff" data-id="${r.id}" ${r.playoff?'checked':''}> PO</label></td>
+      <td class="l"><label class="mini" style="cursor:pointer"><input type="checkbox" data-f="phase" data-id="${r.id}" ${r.phase==='playoff'?'checked':''}> PO</label></td>
       <td>${scored?`<span class="chip" style="padding-right:4px">${carLink(winner,'carlink')} won</span>`:`<span class="mini">—</span>`}</td>
       <td class="l">
         <button class="btn ghost sm" data-goto="${r.id}">${scored?'Edit':'Enter'}</button>
@@ -980,7 +1126,7 @@ function renderSchedule(){
     el.onchange = ()=>{
       const r = DB.races.find(x=>x.id===el.dataset.id); if(!r) return;
       const f = el.dataset.f;
-      r[f] = f==='playoff' ? el.checked : el.value;
+      r[f] = f==='phase' ? (el.checked?'playoff':'regular') : el.value;
       saveDB(); render();
     };
   });
@@ -1051,7 +1197,7 @@ function renderEnter(){
     <div class="card">
       <div class="row" style="justify-content:space-between">
         <div class="row" style="gap:8px">
-          ${typeChip(race.type)} ${race.playoff?'<span class="chip playoff">Playoff</span>':''}
+          ${typeChip(race.type)} ${race.phase==='playoff'?'<span class="chip playoff">Playoff</span>':''}
           <span class="mini">${esc(race.name)}${race.date?` · ${esc(race.date)}`:''} · ${field.length}-car field</span>
         </div>
         <div class="mini" id="entryHint"></div>
@@ -1185,8 +1331,7 @@ function renderCars(){
     </div>`;
 
   view.querySelectorAll('input[data-f="driver"]').forEach(el=> el.onchange=()=>{
-    const c=DB.cars.find(x=>x.num===el.dataset.num); if(!c) return;
-    c.driver = el.value.trim(); saveDB();
+    setDriverName(el.dataset.num, el.value.trim()); saveDB(); render();
   });
   view.querySelectorAll('select[data-f="team"]').forEach(el=> el.onchange=()=>{
     const c=DB.cars.find(x=>x.num===el.dataset.num); if(!c) return;
@@ -1613,7 +1758,7 @@ function renderData(){
   document.getElementById('expRaces').onclick=()=>{
     let csv='Race,Track,Type,Playoff,Car,Start,Finish,Points\n';
     DB.races.forEach((r,i)=>{ if(!r.results) return;
-      r.results.forEach(x=> csv+=`${i+1},"${r.name}",${r.type},${r.playoff?'Y':'N'},${x.num},${x.start??''},${x.finish},${pointsForFinish(x.finish)}\n`); });
+      r.results.forEach(x=> csv+=`${i+1},"${r.name}",${r.type},${r.phase==='playoff'?'Y':'N'},${x.num},${x.start??''},${x.finish},${pointsForFinish(x.finish)}\n`); });
     dl('HWRS_AllRaces.csv',csv); toast('Races exported');
   };
   document.getElementById('expJson').onclick=()=>{ dl('HWRS_backup.json',JSON.stringify(DB_ROOT,null,2),'application/json'); toast('Full backup downloaded (all seasons)'); };
