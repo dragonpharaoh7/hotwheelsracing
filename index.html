@@ -466,23 +466,30 @@ const DB = new Proxy({}, {
   }
 });
 function setActiveSeason(id){
-  if(DB_ROOT.seasons.some(s=>s.id===id)){ DB_ROOT.activeSeason=id; saveDB(); render(); }
+  if(DB_ROOT.seasons.some(s=>s.id===id)){
+    DB_ROOT.activeSeason=id;
+    try{ localStorage.setItem('hwrs:active', id); }catch(e){}
+    render();
+  }
 }
 
 /* ---------- storage layer ---------- */
+const DATA_MODE = 'tables';   // this build reads/writes the 6 relational tables
+
 async function loadDB(){
   if(CONFIGURED){
     try{
       sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      const {data, error} = await sb.from('leagues').select('data').eq('id', LEAGUE_ID).maybeSingle();
-      if(error) throw error;
-      if(data && data.data){ DB_ROOT = migrateToSeasons(data.data); }
-      else { DB_ROOT = seedRoot(); await pushDB(); }   // first ever load → seed the shared row
+      DB_ROOT = await loadFromTables();
+      if(!DB_ROOT || !DB_ROOT.seasons || !DB_ROOT.seasons.length){
+        // Tables empty → fall back to seed (shouldn't happen post-migration)
+        DB_ROOT = seedRoot();
+      }
       subscribeRealtime();
       return;
     }catch(e){
       console.error(e);
-      toast('Cloud connect failed — using local mode');
+      toast('Cloud connect failed — using local copy');
     }
   }
   try{
@@ -492,33 +499,160 @@ async function loadDB(){
   DB_ROOT = seedRoot(); saveLocal();
 }
 
-function saveLocal(){
-  try{ localStorage.setItem('hwrs:v1', JSON.stringify(DB_ROOT)); }catch(e){}
+// Assemble the season structure from the 6 tables.
+async function loadFromTables(){
+  const [seasons, scars, teams, races, results, fights, drivers] = await Promise.all([
+    sb.from('seasons').select('*').order('sort_order'),
+    sb.from('season_cars').select('*'),
+    sb.from('teams').select('*'),
+    sb.from('races').select('*'),
+    sb.from('results').select('*'),
+    sb.from('fights').select('*'),
+    sb.from('drivers').select('*'),
+  ]);
+  for(const r of [seasons,scars,teams,races,results,fights,drivers]){
+    if(r.error) throw r.error;
+  }
+  const driverMap = {};
+  (drivers.data||[]).forEach(d=> driverMap[d.car_num]=d.name||'');
+
+  // group results by race
+  const resByRace = {};
+  (results.data||[]).forEach(r=>{
+    (resByRace[r.race_id] = resByRace[r.race_id]||[]).push({
+      num:r.car_num, start:r.start_pos, lap1:r.lap1, lap2:r.lap2, finish:r.finish
+    });
+  });
+  // sort each race's results by finish for stable display
+  Object.values(resByRace).forEach(a=> a.sort((x,y)=>x.finish-y.finish));
+
+  const seasonObjs = (seasons.data||[]).map(s=>{
+    const sid = s.id;
+    const cars = (scars.data||[]).filter(c=>c.season_id===sid).map(c=>({
+      num:c.car_num, team:c.team||'', active:c.active!==false, driver: driverMap[c.car_num]||''
+    }));
+    const teamRows = (teams.data||[]).filter(t=>t.season_id===sid).map(t=>({
+      name:t.name, color:t.color, ...(t.logo?{logo:t.logo}:{})
+    }));
+    const raceRows = (races.data||[]).filter(r=>r.season_id===sid)
+      .sort((a,b)=> (a.orig_number||0)-(b.orig_number||0))
+      .map(r=>({
+        id:r.id, name:r.name, type:r.type||'short', date:r.race_date||'',
+        phase:r.phase||'regular', entries: r.entries||[],
+        results: resByRace[r.id] || (r.phase==='regular' && !resByRace[r.id] ? null : null)
+      }));
+    // a race with no result rows should have results:null (unscored)
+    raceRows.forEach(r=>{ if(!resByRace[r.id]) r.results=null; });
+    const fightRows = (fights.data||[]).filter(f=>f.season_id===sid).map(f=>({
+      winner:f.winner, loser:f.loser, tie:!!f.tie
+    }));
+    return {
+      id:s.id, label:s.label, year:s.year, hasLaps:!!s.has_laps,
+      regularMetric:s.regular_metric||'points', playoffMetric:s.playoff_metric||'points',
+      regularCount:s.regular_count||0, playoffCount:s.playoff_count||0,
+      playoffComplete:!!s.playoff_complete,
+      cars, teams:teamRows, races:raceRows, fights:fightRows
+    };
+  });
+
+  const activeId = (localStorage.getItem('hwrs:active') || (seasonObjs.find(s=>s.id==='S2')?'S2':seasonObjs[0]?.id) || 'S2');
+  const root = { schema:2, activeSeason:activeId, seasons:seasonObjs, drivers:driverMap };
+  root.seasons.forEach(normalizeSeasonNums);
+  return root;
 }
+
+function saveLocal(){
+  try{
+    localStorage.setItem('hwrs:v1', JSON.stringify(DB_ROOT));
+    if(DB_ROOT && DB_ROOT.activeSeason) localStorage.setItem('hwrs:active', DB_ROOT.activeSeason);
+  }catch(e){}
+}
+
+// Persist the ACTIVE season's rows (plus league-wide drivers) to the tables.
+// Every in-app edit happens within the active season, so upserting it covers all writes.
 async function pushDB(){
   if(!sb) return;
-  const {error} = await sb.from('leagues').upsert({id:LEAGUE_ID, data:DB_ROOT, updated_at:new Date().toISOString()});
-  if(error){ console.error(error); toast('Save failed — check connection'); }
+  const s = activeSeasonObj();
+  if(!s) return;
+  try{
+    // season meta
+    await sb.from('seasons').upsert({
+      id:s.id, label:s.label, year:s.year, has_laps:!!s.hasLaps,
+      regular_metric:s.regularMetric, playoff_metric:s.playoffMetric,
+      regular_count:s.regularCount, playoff_count:s.playoffCount,
+      playoff_complete:!!s.playoffComplete,
+      sort_order: s.id==='S1'?1:2
+    });
+    // drivers (league-wide)
+    const dmap = DB_ROOT.drivers||{};
+    const driverRows = Object.keys(dmap).map(k=>({car_num:k, name:dmap[k]||''}));
+    if(driverRows.length) await sb.from('drivers').upsert(driverRows);
+
+    // season_cars — upsert current, delete removed
+    const carRows = s.cars.map(c=>({season_id:s.id, car_num:c.num, team:c.team||'', active:c.active!==false}));
+    if(carRows.length) await sb.from('season_cars').upsert(carRows);
+    // teams — upsert, and delete any not present
+    const teamRows = (s.teams||[]).map(t=>({season_id:s.id, name:t.name, color:t.color||null, logo:t.logo||null}));
+    if(teamRows.length) await sb.from('teams').upsert(teamRows);
+
+    // races — upsert
+    const raceRows = s.races.map((r,i)=>({
+      id:r.id, season_id:s.id, name:r.name, type:r.type, race_date: r.date||null,
+      phase:r.phase||'regular', orig_number:i+1, entries:r.entries||[]
+    }));
+    if(raceRows.length) await sb.from('races').upsert(raceRows);
+
+    // results — replace this season's results for scored races
+    const raceIds = s.races.map(r=>r.id);
+    await sb.from('results').delete().in('race_id', raceIds);
+    const resRows = [];
+    s.races.forEach(r=>{ if(r.results) r.results.forEach(x=>resRows.push({
+      race_id:r.id, car_num:x.num, start_pos:x.start??null, lap1:x.lap1??null, lap2:x.lap2??null, finish:x.finish
+    })); });
+    if(resRows.length) await sb.from('results').insert(resRows);
+
+    // fights — replace this season's set
+    await sb.from('fights').delete().eq('season_id', s.id);
+    const fightRows = (s.fights||[]).map(f=>({season_id:s.id, winner:f.winner, loser:f.loser, tie:!!f.tie}));
+    if(fightRows.length) await sb.from('fights').insert(fightRows);
+
+    setSyncDot(false);
+  }catch(e){
+    console.error(e); toast('Save failed — check connection');
+  }
 }
+
 async function saveDB(){
   saveLocal();
   if(applyingRemote) return;
-  if(sb){ clearTimeout(saveTimer); saveTimer = setTimeout(pushDB, 400); }
+  if(sb){ clearTimeout(saveTimer); saveTimer = setTimeout(pushDB, 500); }
 }
+
+let reloadTimer=null;
 function subscribeRealtime(){
   if(!sb) return;
-  sb.channel('league-'+LEAGUE_ID)
-    .on('postgres_changes',
-        {event:'*', schema:'public', table:'leagues', filter:'id=eq.'+LEAGUE_ID},
-        payload=>{
-          const incoming = payload.new && payload.new.data;
-          if(!incoming) return;
-          applyingRemote = true;
-          DB_ROOT = migrateToSeasons(incoming);
-          render();
-          applyingRemote = false;
-          setSyncDot(true);
-        })
+  const reload = ()=>{
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(async ()=>{
+      if(saveTimer) return;                 // don't clobber a pending local save
+      try{
+        applyingRemote = true;
+        const fresh = await loadFromTables();
+        const active = DB_ROOT.activeSeason;
+        DB_ROOT = fresh; DB_ROOT.activeSeason = active;
+        render(); setSyncDot(true);
+      }catch(e){ console.error(e); }
+      finally{ applyingRemote=false; }
+    }, 300);
+  };
+  sb.channel('hwrs-tables')
+    .on('postgres_changes', {event:'*', schema:'public', table:'seasons'}, reload)
+    .on('postgres_changes', {event:'*', schema:'public', table:'season_cars'}, reload)
+    .on('postgres_changes', {event:'*', schema:'public', table:'teams'}, reload)
+    .on('postgres_changes', {event:'*', schema:'public', table:'races'}, reload)
+    .on('postgres_changes', {event:'*', schema:'public', table:'results'}, reload)
+    .on('postgres_changes', {event:'*', schema:'public', table:'fights'}, reload)
+    .on('postgres_changes', {event:'*', schema:'public', table:'drivers'}, reload)
     .subscribe();
 }
 
@@ -526,9 +660,9 @@ function setSyncDot(flash){
   const el = document.getElementById('syncState');
   if(!el) return;
   if(!CONFIGURED){ el.textContent = '● local only'; el.style.color = 'var(--muted)'; return; }
-  el.textContent = flash ? '● synced (updated)' : '● live sync on';
+  el.textContent = flash ? '● synced · tables' : '● live sync on · tables';
   el.style.color = 'var(--flag2)';
-  if(flash){ clearTimeout(el._t); el._t=setTimeout(()=>{ el.textContent='● live sync on'; },1800); }
+  if(flash){ clearTimeout(el._t); el._t=setTimeout(()=>{ el.textContent='● live sync on · tables'; },1800); }
 }
 
 // Canonical car-number aliases. 0 1/2 and 0.5 are the SAME car; 07≠7 and 03≠3 stay distinct.
@@ -637,6 +771,7 @@ function careerStats(num){
   const perSeason = [];
   let cRaces=0, cWins=0, cStartSum=0, cStartCnt=0, cFinSum=0, cPts=0, cDiff=0, cTop=0;
   DB_ROOT.seasons.forEach(season=>{
+    const usesPoints = season.regularMetric==='points';
     let pts=0, races=0, wins=0, startSum=0, startCnt=0, finSum=0, diff=0, best=null;
     season.races.forEach(r=>{
       if(!r.results) return;
@@ -649,12 +784,13 @@ function careerStats(num){
     });
     if(races>0){
       perSeason.push({
-        id:season.id, label:season.label, year:season.year, hasLaps:season.hasLaps,
+        id:season.id, label:season.label, year:season.year, hasLaps:season.hasLaps, usesPoints,
         races, wins, pts, diff, best,
         avgStart: startCnt? startSum/startCnt : null,
         avgFinish: races? finSum/races : null
       });
-      cRaces+=races; cWins+=wins; cPts+=pts; cDiff+=diff;
+      cRaces+=races; cWins+=wins; cDiff+=diff;
+      if(usesPoints) cPts+=pts;   // career points only from point-using seasons
       cStartSum+=startSum; cStartCnt+=startCnt; cFinSum+=finSum;
     }
   });
@@ -900,7 +1036,9 @@ let standingsPhase = 'regular';   // 'regular' | 'playoff'
 function renderStandings(){
   const season = activeSeasonObj();
   const hasPO = seasonHasPlayoffs();
-  const poVisible = hasPO && (season.id!=='S2' || regularSeasonComplete());  // S2 playoffs hidden until reg season done
+  // Playoffs are visible when the season has playoff races AND either its playoffs
+  // are already complete (e.g. 2024) OR its regular season is finished (playoffs may begin).
+  const poVisible = hasPO && (season.playoffComplete || regularSeasonComplete());
   if(standingsPhase==='playoff' && !poVisible) standingsPhase='regular';
 
   const metric = standingsPhase==='playoff' ? season.playoffMetric : season.regularMetric;
@@ -1425,10 +1563,11 @@ function renderDriverDetail(num){
 
   const finBadge = (f)=>{ const cls = f===1?'fin-1' : f<=5?'fin-top5':'fin-mid'; return `<span class="fin-badge ${cls}">${f}</span>`; };
 
+  const seasonByPoints = activeSeasonObj().regularMetric==='points';
   const statChips = s ? `
     <div class="stat-cards" style="margin-top:16px">
       <div class="stat" style="border-left-color:${col}"><div class="k">Season Rank</div><div class="v">${rank>=0?rank+1:'—'}<small> / ${rankAll.length}</small></div></div>
-      <div class="stat" style="border-left-color:${col}"><div class="k">Points</div><div class="v">${s.pts}</div></div>
+      ${seasonByPoints?`<div class="stat" style="border-left-color:${col}"><div class="k">Points</div><div class="v">${s.pts}</div></div>`:''}
       <div class="stat" style="border-left-color:${col}"><div class="k">Wins</div><div class="v">${s.wins}</div></div>
       <div class="stat" style="border-left-color:${col}"><div class="k">Avg Finish</div><div class="v">${fmt(s.avgFinish)}</div></div>
       <div class="stat" style="border-left-color:${col}"><div class="k">Avg Start</div><div class="v">${fmt(s.avgStart)}</div></div>
@@ -1439,7 +1578,7 @@ function renderDriverDetail(num){
   const resultsTable = results.length ? `
     <div class="card" style="padding:6px 4px">
       <table class="data">
-        <thead><tr><th class="l">Rd</th><th class="l">Race</th><th class="l">Type</th><th>Start</th>${hasLaps?'<th>Lap 1</th><th>Lap 2</th>':''}<th>Finish</th><th>Pts</th></tr></thead>
+        <thead><tr><th class="l">Rd</th><th class="l">Race</th><th class="l">Type</th><th>Start</th>${hasLaps?'<th>Lap 1</th><th>Lap 2</th>':''}<th>Finish</th>${seasonByPoints?'<th>Pts</th>':''}</tr></thead>
         <tbody>${results.map(x=>`<tr>
           <td class="l pos">${x.raceNum}</td>
           <td class="l">${esc(x.name)}${x.date?`<br><span class="mini">${esc(x.date)}</span>`:''}</td>
@@ -1447,7 +1586,7 @@ function renderDriverDetail(num){
           <td>${x.start??'—'}</td>
           ${hasLaps?`<td>${x.lap1??'—'}</td><td>${x.lap2??'—'}</td>`:''}
           <td>${finBadge(x.finish)}</td>
-          <td class="pts">${x.pts}</td>
+          ${seasonByPoints?`<td class="pts">${x.pts}</td>`:''}
         </tr>`).join('')}</tbody>
       </table>
     </div>` : `<p class="mini">No results recorded yet.</p>`;
@@ -1467,28 +1606,31 @@ function renderDriverDetail(num){
 
   // Career section — aggregate across all seasons (ESPN-style).
   const cs = careerStats(num);
+  // Which seasons used points? (for showing/blanking the Pts column)
+  const metricById = {}; DB_ROOT.seasons.forEach(se=> metricById[se.id]= (se.regularMetric==='points'));
+  const anyPoints = cs.perSeason.some(ps=> metricById[ps.id]);
   const careerSection = cs.career.races>0 ? `
     <h2 class="sec" style="font-size:20px;margin:30px 0 10px">Career</h2>
     <div class="stat-cards">
       <div class="stat" style="border-left-color:${col}"><div class="k">Seasons</div><div class="v">${cs.career.seasons}</div></div>
       <div class="stat" style="border-left-color:${col}"><div class="k">Career Races</div><div class="v">${cs.career.races}</div></div>
       <div class="stat" style="border-left-color:${col}"><div class="k">Career Wins</div><div class="v">${cs.career.wins}</div></div>
-      <div class="stat" style="border-left-color:${col}"><div class="k">Career Points</div><div class="v">${cs.career.pts}</div></div>
+      ${anyPoints?`<div class="stat" style="border-left-color:${col}"><div class="k">Career Points</div><div class="v">${cs.career.pts}<small> pts-era</small></div></div>`:''}
       <div class="stat" style="border-left-color:${col}"><div class="k">Career Avg Fin</div><div class="v">${fmt(cs.career.avgFinish)}</div></div>
     </div>
     <div class="card" style="padding:6px 4px;margin-top:6px">
       <table class="data">
-        <thead><tr><th class="l">Season</th><th>Races</th><th>Wins</th><th>Pts</th><th class="hide-sm">Avg St</th><th>Avg Fin</th><th>Best</th><th class="hide-sm">Diff</th></tr></thead>
+        <thead><tr><th class="l">Season</th><th>Races</th><th>Wins</th>${anyPoints?'<th>Pts</th>':''}<th class="hide-sm">Avg St</th><th>Avg Fin</th><th>Best</th><th class="hide-sm">Diff</th></tr></thead>
         <tbody>${cs.perSeason.map(ps=>`<tr>
           <td class="l"><strong>${esc(ps.label)}</strong> <span class="mini">${esc(ps.year)}</span></td>
-          <td>${ps.races}</td><td>${ps.wins}</td><td class="pts">${ps.pts}</td>
+          <td>${ps.races}</td><td>${ps.wins}</td>${anyPoints?`<td class="pts">${metricById[ps.id]? ps.pts : '<span class="mini">n/a</span>'}</td>`:''}
           <td class="hide-sm">${fmt(ps.avgStart)}</td><td>${fmt(ps.avgFinish)}</td>
           <td>${ps.best!=null?finBadge(ps.best):'—'}</td>
           <td class="hide-sm">${ps.diff>0?'+':''}${ps.diff}</td>
         </tr>`).join('')}
         <tr style="border-top:2px solid var(--flag)">
           <td class="l"><strong>Career</strong></td>
-          <td>${cs.career.races}</td><td>${cs.career.wins}</td><td class="pts">${cs.career.pts}</td>
+          <td>${cs.career.races}</td><td>${cs.career.wins}</td>${anyPoints?`<td class="pts">${cs.career.pts}</td>`:''}
           <td class="hide-sm">${fmt(cs.career.avgStart)}</td><td>${fmt(cs.career.avgFinish)}</td>
           <td>—</td><td class="hide-sm">${cs.career.diff>0?'+':''}${cs.career.diff}</td>
         </tr>
