@@ -442,6 +442,8 @@ let DB_ROOT = null;   // { schema, activeSeason, seasons:[...] }
 let sb = null;                 // supabase client (null if not configured)
 let saveTimer = null;
 let applyingRemote = false;    // guard so realtime echoes don't loop
+let channelReady = false;      // true only while the realtime socket is actually SUBSCRIBED
+let pendingLocalEdits = false; // edits made while disconnected, not yet pushed
 
 const CONFIGURED = SUPABASE_URL && SUPABASE_ANON_KEY;
 
@@ -482,14 +484,15 @@ async function loadDB(){
       sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       DB_ROOT = await loadFromTables();
       if(!DB_ROOT || !DB_ROOT.seasons || !DB_ROOT.seasons.length){
-        // Tables empty → fall back to seed (shouldn't happen post-migration)
         DB_ROOT = seedRoot();
       }
       subscribeRealtime();
+      wakeHandlers();
       return;
     }catch(e){
       console.error(e);
       toast('Cloud connect failed — using local copy');
+      setSyncState('offline');
     }
   }
   try{
@@ -516,14 +519,12 @@ async function loadFromTables(){
   const driverMap = {};
   (drivers.data||[]).forEach(d=> driverMap[d.car_num]=d.name||'');
 
-  // group results by race
   const resByRace = {};
   (results.data||[]).forEach(r=>{
     (resByRace[r.race_id] = resByRace[r.race_id]||[]).push({
       num:r.car_num, start:r.start_pos, lap1:r.lap1, lap2:r.lap2, finish:r.finish
     });
   });
-  // sort each race's results by finish for stable display
   Object.values(resByRace).forEach(a=> a.sort((x,y)=>x.finish-y.finish));
 
   const seasonObjs = (seasons.data||[]).map(s=>{
@@ -539,9 +540,8 @@ async function loadFromTables(){
       .map(r=>({
         id:r.id, name:r.name, type:r.type||'short', date:r.race_date||'',
         phase:r.phase||'regular', entries: r.entries||[],
-        results: resByRace[r.id] || (r.phase==='regular' && !resByRace[r.id] ? null : null)
+        results: resByRace[r.id] || null
       }));
-    // a race with no result rows should have results:null (unscored)
     raceRows.forEach(r=>{ if(!resByRace[r.id]) r.results=null; });
     const fightRows = (fights.data||[]).filter(f=>f.season_id===sid).map(f=>({
       winner:f.winner, loser:f.loser, tie:!!f.tie
@@ -568,57 +568,110 @@ function saveLocal(){
   }catch(e){}
 }
 
-// Persist the ACTIVE season's rows (plus league-wide drivers) to the tables.
-// Every in-app edit happens within the active season, so upserting it covers all writes.
+// Persist ONE season's rows to the tables. Upserts what exists locally AND deletes
+// rows the cloud still has but this season no longer does.
+async function pushSeason(s){
+  await sb.from('seasons').upsert({
+    id:s.id, label:s.label, year:s.year, has_laps:!!s.hasLaps,
+    regular_metric:s.regularMetric, playoff_metric:s.playoffMetric,
+    regular_count:s.regularCount, playoff_count:s.playoffCount,
+    playoff_complete:!!s.playoffComplete,
+    sort_order: s.id==='S1'?1:2
+  });
+
+  // season_cars — upsert current, then remove any the cloud still has
+  const carRows = s.cars.map(c=>({season_id:s.id, car_num:c.num, team:c.team||'', active:c.active!==false}));
+  if(carRows.length) await sb.from('season_cars').upsert(carRows);
+  const exCars = await sb.from('season_cars').select('car_num').eq('season_id', s.id);
+  const keepCars = new Set(s.cars.map(c=>c.num));
+  for(const row of (exCars.data||[])){
+    if(!keepCars.has(row.car_num)){
+      await sb.from('season_cars').delete().eq('season_id', s.id).eq('car_num', row.car_num);
+    }
+  }
+
+  // teams — upsert current, then remove any the cloud still has
+  const teamRows = (s.teams||[]).map(t=>({season_id:s.id, name:t.name, color:t.color||null, logo:t.logo||null}));
+  if(teamRows.length) await sb.from('teams').upsert(teamRows);
+  const exTeams = await sb.from('teams').select('name').eq('season_id', s.id);
+  const keepTeams = new Set((s.teams||[]).map(t=>t.name));
+  for(const row of (exTeams.data||[])){
+    if(!keepTeams.has(row.name)){
+      await sb.from('teams').delete().eq('season_id', s.id).eq('name', row.name);
+    }
+  }
+
+  // races — upsert current, then remove any the cloud still has (results cascade)
+  const raceRows = s.races.map((r,i)=>({
+    id:r.id, season_id:s.id, name:r.name, type:r.type, race_date: r.date||null,
+    phase:r.phase||'regular', orig_number:i+1, entries:r.entries||[]
+  }));
+  if(raceRows.length) await sb.from('races').upsert(raceRows);
+  const exRaces = await sb.from('races').select('id').eq('season_id', s.id);
+  const keepRaces = new Set(s.races.map(r=>r.id));
+  for(const row of (exRaces.data||[])){
+    if(!keepRaces.has(row.id)){
+      await sb.from('races').delete().eq('id', row.id);
+    }
+  }
+
+  // results — replace this season's set
+  const raceIds = s.races.map(r=>r.id);
+  if(raceIds.length) await sb.from('results').delete().in('race_id', raceIds);
+  const resRows = [];
+  s.races.forEach(r=>{ if(r.results) r.results.forEach(x=>resRows.push({
+    race_id:r.id, car_num:x.num, start_pos:x.start??null, lap1:x.lap1??null, lap2:x.lap2??null, finish:x.finish
+  })); });
+  if(resRows.length) await sb.from('results').insert(resRows);
+
+  // fights — replace this season's set
+  await sb.from('fights').delete().eq('season_id', s.id);
+  const fightRows = (s.fights||[]).map(f=>({season_id:s.id, winner:f.winner, loser:f.loser, tie:!!f.tie}));
+  if(fightRows.length) await sb.from('fights').insert(fightRows);
+}
+
+async function pushDrivers(){
+  const dmap = DB_ROOT.drivers||{};
+  const driverRows = Object.keys(dmap).map(k=>({car_num:k, name:dmap[k]||''}));
+  if(driverRows.length) await sb.from('drivers').upsert(driverRows);
+}
+
+// Normal save path: push only the active season.
 async function pushDB(){
+  saveTimer = null;                 // FIX: must clear, or the realtime guard blocks forever
   if(!sb) return;
+  if(!channelReady){                // FIX: never let a disconnected tab overwrite the cloud
+    pendingLocalEdits = true;
+    setSyncState('pending');
+    return;
+  }
   const s = activeSeasonObj();
   if(!s) return;
   try{
-    // season meta
-    await sb.from('seasons').upsert({
-      id:s.id, label:s.label, year:s.year, has_laps:!!s.hasLaps,
-      regular_metric:s.regularMetric, playoff_metric:s.playoffMetric,
-      regular_count:s.regularCount, playoff_count:s.playoffCount,
-      playoff_complete:!!s.playoffComplete,
-      sort_order: s.id==='S1'?1:2
-    });
-    // drivers (league-wide)
-    const dmap = DB_ROOT.drivers||{};
-    const driverRows = Object.keys(dmap).map(k=>({car_num:k, name:dmap[k]||''}));
-    if(driverRows.length) await sb.from('drivers').upsert(driverRows);
-
-    // season_cars — upsert current, delete removed
-    const carRows = s.cars.map(c=>({season_id:s.id, car_num:c.num, team:c.team||'', active:c.active!==false}));
-    if(carRows.length) await sb.from('season_cars').upsert(carRows);
-    // teams — upsert, and delete any not present
-    const teamRows = (s.teams||[]).map(t=>({season_id:s.id, name:t.name, color:t.color||null, logo:t.logo||null}));
-    if(teamRows.length) await sb.from('teams').upsert(teamRows);
-
-    // races — upsert
-    const raceRows = s.races.map((r,i)=>({
-      id:r.id, season_id:s.id, name:r.name, type:r.type, race_date: r.date||null,
-      phase:r.phase||'regular', orig_number:i+1, entries:r.entries||[]
-    }));
-    if(raceRows.length) await sb.from('races').upsert(raceRows);
-
-    // results — replace this season's results for scored races
-    const raceIds = s.races.map(r=>r.id);
-    await sb.from('results').delete().in('race_id', raceIds);
-    const resRows = [];
-    s.races.forEach(r=>{ if(r.results) r.results.forEach(x=>resRows.push({
-      race_id:r.id, car_num:x.num, start_pos:x.start??null, lap1:x.lap1??null, lap2:x.lap2??null, finish:x.finish
-    })); });
-    if(resRows.length) await sb.from('results').insert(resRows);
-
-    // fights — replace this season's set
-    await sb.from('fights').delete().eq('season_id', s.id);
-    const fightRows = (s.fights||[]).map(f=>({season_id:s.id, winner:f.winner, loser:f.loser, tie:!!f.tie}));
-    if(fightRows.length) await sb.from('fights').insert(fightRows);
-
-    setSyncDot(false);
+    await pushDrivers();
+    await pushSeason(s);
+    pendingLocalEdits = false;
+    setSyncState('synced');
   }catch(e){
-    console.error(e); toast('Save failed — check connection');
+    console.error(e);
+    pendingLocalEdits = true;
+    setSyncState('pending');
+    toast('Save failed — change kept locally');
+  }
+}
+
+// Recovery path: push EVERY season, not just the active one.
+async function pushAllSeasons(){
+  if(!sb){ toast('Not connected'); return false; }
+  try{
+    await pushDrivers();
+    for(const s of DB_ROOT.seasons) await pushSeason(s);
+    pendingLocalEdits = false;
+    setSyncState('synced');
+    toast('All seasons pushed to cloud');
+    return true;
+  }catch(e){
+    console.error(e); toast('Push failed — check connection'); return false;
   }
 }
 
@@ -629,41 +682,64 @@ async function saveDB(){
 }
 
 let reloadTimer=null;
-function subscribeRealtime(){
-  if(!sb) return;
-  const reload = ()=>{
-    clearTimeout(reloadTimer);
-    reloadTimer = setTimeout(async ()=>{
-      if(saveTimer) return;                 // don't clobber a pending local save
-      try{
-        applyingRemote = true;
-        const fresh = await loadFromTables();
-        const active = DB_ROOT.activeSeason;
-        DB_ROOT = fresh; DB_ROOT.activeSeason = active;
-        render(); setSyncDot(true);
-      }catch(e){ console.error(e); }
-      finally{ applyingRemote=false; }
-    }, 300);
-  };
-  sb.channel('hwrs-tables')
-    .on('postgres_changes', {event:'*', schema:'public', table:'seasons'}, reload)
-    .on('postgres_changes', {event:'*', schema:'public', table:'season_cars'}, reload)
-    .on('postgres_changes', {event:'*', schema:'public', table:'teams'}, reload)
-    .on('postgres_changes', {event:'*', schema:'public', table:'races'}, reload)
-    .on('postgres_changes', {event:'*', schema:'public', table:'results'}, reload)
-    .on('postgres_changes', {event:'*', schema:'public', table:'fights'}, reload)
-    .on('postgres_changes', {event:'*', schema:'public', table:'drivers'}, reload)
-    .subscribe();
+async function reloadNow(){
+  if(saveTimer) return;              // a push is genuinely queued right now
+  if(pendingLocalEdits) return;      // don't discard unsynced local work
+  try{
+    applyingRemote = true;
+    const fresh = await loadFromTables();
+    const active = DB_ROOT.activeSeason;
+    DB_ROOT = fresh; DB_ROOT.activeSeason = active;
+    saveLocal();
+    render(); setSyncState('synced');
+  }catch(e){ console.error(e); setSyncState('offline'); }
+  finally{ applyingRemote=false; }
 }
 
-function setSyncDot(flash){
+function subscribeRealtime(){
+  if(!sb) return;
+  const reload = ()=>{ clearTimeout(reloadTimer); reloadTimer = setTimeout(reloadNow, 300); };
+  let ch = sb.channel('hwrs-tables');
+  ['seasons','season_cars','teams','races','results','fights','drivers'].forEach(t=>{
+    ch = ch.on('postgres_changes', {event:'*', schema:'public', table:t}, reload);
+  });
+  ch.subscribe(status=>{
+    channelReady = (status === 'SUBSCRIBED');
+    if(channelReady){
+      if(pendingLocalEdits) setSyncState('pending');
+      else { setSyncState('live'); reloadNow(); }
+    } else {
+      setSyncState(pendingLocalEdits ? 'pending' : 'offline');
+    }
+  });
+}
+
+// FIX: mobile browsers kill the socket when backgrounded. Re-check on wake.
+function wakeHandlers(){
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState==='visible' && sb && !pendingLocalEdits) reloadNow();
+  });
+  window.addEventListener('online', ()=>{ if(sb && !pendingLocalEdits) reloadNow(); });
+  window.addEventListener('offline', ()=>{ channelReady=false; setSyncState('offline'); });
+}
+
+function setSyncState(state){
   const el = document.getElementById('syncState');
   if(!el) return;
-  if(!CONFIGURED){ el.textContent = '● local only'; el.style.color = 'var(--muted)'; return; }
-  el.textContent = flash ? '● synced · tables' : '● live sync on · tables';
-  el.style.color = 'var(--flag2)';
-  if(flash){ clearTimeout(el._t); el._t=setTimeout(()=>{ el.textContent='● live sync on · tables'; },1800); }
+  if(!CONFIGURED){ el.textContent='● local only'; el.style.color='var(--muted)'; return; }
+  clearTimeout(el._t);
+  const map = {
+    live:    ['● live sync on',                        'var(--flag2)'],
+    synced:  ['● synced',                              'var(--flag2)'],
+    offline: ['● offline — changes not saved to cloud','var(--gold)'],
+    pending: ['● unsynced local changes — open Data to push','var(--flag)'],
+  };
+  const [text,color] = map[state] || map.offline;
+  el.textContent = text; el.style.color = color;
+  if(state==='synced'){ el._t=setTimeout(()=>{ if(channelReady && !pendingLocalEdits) setSyncState('live'); },1800); }
 }
+// back-compat with existing call sites
+function setSyncDot(flash){ setSyncState(flash ? 'synced' : (channelReady ? 'live' : 'offline')); }
 
 // Canonical car-number aliases. 0 1/2 and 0.5 are the SAME car; 07≠7 and 03≠3 stay distinct.
 const CAR_ALIASES = { '0.5':'0 1/2' };
@@ -1865,6 +1941,16 @@ function renderData(){
     <h2 class="sec">Data</h2>
     <p class="lead">Everything lives in this page and saves automatically. Export to keep your Excel sheets in sync, or back up the whole league as a file.</p>
     <div class="card">
+      <strong style="font-family:var(--disp);text-transform:uppercase;font-size:13px">Cloud sync</strong>
+      <p class="mini" id="syncCardState" style="margin:8px 0 14px"></p>
+      <div class="row">
+        <button class="btn" id="pushAllBtn">Push all seasons to cloud</button>
+        <button class="btn ghost" id="pullBtn">Reload from cloud</button>
+        <button class="btn ghost" id="checkBtn">Check for scoring errors</button>
+      </div>
+      <div id="checkOut" class="mini" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
       <strong style="font-family:var(--disp);text-transform:uppercase;font-size:13px">Export</strong>
       <p class="mini" style="margin:8px 0 14px">Standings and each race as CSV (opens straight into Excel), or a full JSON backup.</p>
       <div class="row">
@@ -1887,6 +1973,30 @@ function renderData(){
       </div>
     </div>`;
 
+  const scs = document.getElementById('syncCardState');
+  if(scs) scs.textContent = !CONFIGURED ? 'Local only — no cloud configured.'
+    : pendingLocalEdits ? 'You have local changes that are NOT in the cloud. Push them before opening the site elsewhere.'
+    : channelReady ? 'Connected and live.' : 'Disconnected. Changes are saving locally only.';
+  document.getElementById('pushAllBtn').onclick = async ()=>{ if(await pushAllSeasons()) render(); };
+  document.getElementById('pullBtn').onclick = async ()=>{
+    if(pendingLocalEdits && !confirm('You have local changes that were never pushed. Reloading from the cloud will DISCARD them. Continue?')) return;
+    pendingLocalEdits = false; await reloadNow(); toast('Reloaded from cloud');
+  };
+  document.getElementById('checkBtn').onclick = ()=>{
+    const out=[];
+    DB_ROOT.seasons.forEach(s=> s.races.forEach((r,i)=>{
+      if(!r.results || !r.results.length) return;
+      const fins=r.results.map(x=>x.finish);
+      const dupes=[...new Set(fins.filter((v,j)=>fins.indexOf(v)!==j))];
+      if(dupes.length) out.push(`${s.label} · race ${i+1} "${r.name}": duplicate finish ${dupes.join(', ')}`);
+      if(r.entries && r.entries.length && r.results.length !== r.entries.length)
+        out.push(`${s.label} · race ${i+1} "${r.name}": ${r.results.length} of ${r.entries.length} cars scored`);
+    }));
+    document.getElementById('checkOut').innerHTML = out.length
+      ? '<strong style="color:var(--flag)">'+out.length+' issue(s):</strong><br>'+out.join('<br>')
+      : '<span style="color:var(--flag2)">No scoring problems found.</span>';
+  };
+
   function dl(name, text, type='text/csv'){
     const blob=new Blob([text],{type}); const url=URL.createObjectURL(blob);
     const a=document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url);
@@ -1906,7 +2016,7 @@ function renderData(){
   document.getElementById('expJson').onclick=()=>{ dl('HWRS_backup.json',JSON.stringify(DB_ROOT,null,2),'application/json'); toast('Full backup downloaded (all seasons)'); };
   document.getElementById('impFile').onchange=e=>{
     const f=e.target.files[0]; if(!f) return;
-    const rd=new FileReader(); rd.onload=()=>{ try{ DB_ROOT=migrateToSeasons(JSON.parse(rd.result)); saveDB(); render(); toast('League restored'); }catch(err){ toast('Invalid backup file'); } };
+    const rd=new FileReader(); rd.onload=async ()=>{ try{ DB_ROOT=migrateToSeasons(JSON.parse(rd.result)); saveLocal(); await pushAllSeasons(); render(); toast('League restored'); }catch(err){ toast('Invalid backup file'); } };
     rd.readAsText(f);
   };
   document.getElementById('clearResultsBtn').onclick=()=>{
@@ -1922,7 +2032,6 @@ function renderData(){
 /* ---------- boot ---------- */
 (async function(){
   await loadDB();
-  setSyncDot(false);
   render();
 })();
 </script>
