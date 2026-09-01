@@ -1068,17 +1068,35 @@ function seasonChampion(){
 }
 
 /* ---------- playoff projection (Monte Carlo, runs in-browser) ----------
-   For each unscored race we randomly order its entered field, weighting each
-   car by its season form (lower avg finish = more likely to finish up front).
-   Repeat many times; tally how often each car ends the season in the top 16,
-   and record where the 16th-place points total lands (the projected cutoff). */
-function simulatePlayoffs(iters=3000){
+   Each unscored race is simulated by drawing a finishing order for its entered
+   field, then points are tallied and we count how often each car ends the
+   regular season in the top 16.
+
+   FORM_WEIGHT controls how much a car's past average finish tilts that draw:
+     0 = every entered car equally likely to win (a fair dice game)
+     1 = the old behaviour, probability proportional to 1/avgFinish
+
+   It is set to 0 deliberately. Two tests on this league's own results found no
+   evidence that past finishes predict future ones:
+
+     · Split-half reliability, Season 1 (23 races, 28 cars): r = -0.04, against
+       a shuffled-dice null of [-0.37, +0.38]. p = 0.58.
+     · Between-car spread in season average finish vs. the same null:
+       S1 p = 0.50, S2 p = 0.72. Neither season's standings are more spread out
+       than pure chance would produce.
+
+   That is the expected result for a game resolved by 2d6. Weighting the sim by
+   form made the projection look confident about something it cannot know, which
+   is exactly the misleading behaviour this replaces. Raise FORM_WEIGHT above 0
+   only if a future season's results actually show signal. */
+const FORM_WEIGHT = 0;
+
+function simulatePlayoffs(iters=5000){
   const cutIdx = 15; // 16th place, zero-based
-  // current standings snapshot
-  const base = {}; // num -> current points
-  const form = {}; // num -> avg finish (for weighting); default 8.5 (mid of 16)
+  const base = {};   // num -> current points
+  const form = {};   // num -> avg finish, only consulted when FORM_WEIGHT > 0
   computeStandings().forEach(r=>{ base[r.num]=r.pts; form[r.num]= r.avgFinish!=null? r.avgFinish : 8.5; });
-  // ensure every active/entered car exists in base even with 0 races
+
   const allNums = new Set();
   DB.cars.filter(c=>c.active).forEach(c=>allNums.add(c.num));
   const unscored = DB.races.filter(r=>!r.results);
@@ -1088,12 +1106,20 @@ function simulatePlayoffs(iters=3000){
   const madeCount = {}; allNums.forEach(n=> madeCount[n]=0);
   let cutlineSum = 0;
 
-  // weighted-shuffle: sample a finishing order where stronger cars tend to place higher
-  function simRace(entries){
-    // weight = inverse of form (better/lower avg finish → higher weight)
-    const pool = entries.map(n=>({n, w: 1/Math.max(0.5, form[n]||8.5)}));
-    const order = [];
-    const p = pool.slice();
+  // Unbiased Fisher-Yates. Every ordering of the field equally likely.
+  function shuffleOrder(entries){
+    const a = entries.slice();
+    for(let i=a.length-1; i>0; i--){
+      const j = Math.floor(Math.random()*(i+1));
+      const t=a[i]; a[i]=a[j]; a[j]=t;
+    }
+    return a;
+  }
+
+  // Form-weighted draw, kept only for FORM_WEIGHT > 0.
+  function weightedOrder(entries){
+    const p = entries.map(n=>({n, w: Math.pow(1/Math.max(0.5, form[n]||8.5), FORM_WEIGHT)}));
+    const order=[];
     while(p.length){
       let tot=0; for(const x of p) tot+=x.w;
       let pick=Math.random()*tot, k=0;
@@ -1101,26 +1127,27 @@ function simulatePlayoffs(iters=3000){
       if(k>=p.length) k=p.length-1;
       order.push(p[k].n); p.splice(k,1);
     }
-    return order; // order[0] = 1st place
+    return order;
   }
+
+  const simRace = FORM_WEIGHT === 0 ? shuffleOrder : weightedOrder;
 
   for(let it=0; it<iters; it++){
     const pts = Object.assign({}, base);
     for(const r of unscored){
       const field = (r.entries&&r.entries.length)? r.entries : [];
       if(!field.length) continue;
-      const order = simRace(field);
-      order.forEach((n,i)=>{ pts[n] = (pts[n]||0) + pointsForFinish(i+1); });
+      simRace(field).forEach((n,i)=>{ pts[n] = (pts[n]||0) + pointsForFinish(i+1); });
     }
     const ranked = Object.entries(pts).sort((a,b)=> b[1]-a[1]);
-    for(let i=0;i<ranked.length && i<=cutIdx;i++){ if(i<=cutIdx) madeCount[ranked[i][0]] = (madeCount[ranked[i][0]]||0); }
     ranked.slice(0, cutIdx+1).forEach(([n])=> madeCount[n]++);
     cutlineSum += (ranked[cutIdx]? ranked[cutIdx][1] : 0);
   }
 
   const odds = {};
   allNums.forEach(n=> odds[n] = madeCount[n]/iters);
-  return { odds, projectedCutoff: Math.round(cutlineSum/iters), racesLeft: unscored.length, iters };
+  return { odds, projectedCutoff: Math.round(cutlineSum/iters),
+           racesLeft: unscored.length, iters, formWeight: FORM_WEIGHT };
 }
 
 /* ---------- UI plumbing ---------- */
@@ -1340,7 +1367,7 @@ function renderStandings(){
     <div class="card" style="padding:6px 4px">
       <table class="data"><thead>${head}</thead><tbody>${bodyRows}</tbody></table>
     </div>
-    ${proj?`<p class="mini" style="margin-top:10px">Playoff % and projected cutoff come from ${proj.iters.toLocaleString()} simulations of the ${proj.racesLeft} remaining regular-season race${proj.racesLeft===1?'':'s'}, weighting each car by current form.</p>`:''}
+    ${proj?`<p class="mini" style="margin-top:10px">Playoff % and projected cutoff come from ${proj.iters.toLocaleString()} simulations of the ${proj.racesLeft} remaining regular-season race${proj.racesLeft===1?'':'s'}. ${proj.formWeight===0?'Every entered car is treated as equally likely to win each race, so these odds reflect points already banked and races left &mdash; not form. Testing this league&rsquo;s own results found no evidence that past finishes predict future ones.':`Cars are weighted by current form (weight ${proj.formWeight}).`}</p>`:''}
     ` : `<div class="empty"><i>🏁</i>${standingsPhase==='playoff'?'No playoff races scored yet.':'No races scored yet. Head to <strong>Enter Race</strong> to log your first result.'}</div>`}
   `;
 
