@@ -444,6 +444,24 @@ let saveTimer = null;
 let applyingRemote = false;    // guard so realtime echoes don't loop
 let channelReady = false;      // true only while the realtime socket is actually SUBSCRIBED
 let pendingLocalEdits = false; // edits made while disconnected, not yet pushed
+let cloudVersion = null;       // server-side counter this tab last saw
+let cloudMeta = {at:null, by:null};
+let conflictState = null;      // {mine, serverVersion, at, by} when this tab is stale
+let pollTimer = null;
+
+// stable per-device name, for "last saved by"
+const CLIENT_ID = (()=>{
+  try{
+    let v = localStorage.getItem('hwrs:client');
+    if(!v){
+      const ua = navigator.userAgent;
+      const kind = /iPhone|iPad|Android|Mobile/i.test(ua) ? 'phone' : 'desktop';
+      v = kind + '-' + Math.random().toString(36).slice(2,6);
+      localStorage.setItem('hwrs:client', v);
+    }
+    return v;
+  }catch(e){ return 'unknown'; }
+})();
 
 const CONFIGURED = SUPABASE_URL && SUPABASE_ANON_KEY;
 
@@ -504,7 +522,7 @@ async function loadDB(){
 
 // Assemble the season structure from the 6 tables.
 async function loadFromTables(){
-  const [seasons, scars, teams, races, results, fights, drivers] = await Promise.all([
+  const [seasons, scars, teams, races, results, fights, drivers, sync] = await Promise.all([
     sb.from('seasons').select('*').order('sort_order'),
     sb.from('season_cars').select('*'),
     sb.from('teams').select('*'),
@@ -512,9 +530,14 @@ async function loadFromTables(){
     sb.from('results').select('*'),
     sb.from('fights').select('*'),
     sb.from('drivers').select('*'),
+    sb.from('sync_state').select('*').eq('id',1).maybeSingle(),
   ]);
   for(const r of [seasons,scars,teams,races,results,fights,drivers]){
     if(r.error) throw r.error;
+  }
+  if(sync && sync.data){
+    cloudVersion = sync.data.version;
+    cloudMeta = {at: sync.data.updated_at, by: sync.data.updated_by};
   }
   const driverMap = {};
   (drivers.data||[]).forEach(d=> driverMap[d.car_num]=d.name||'');
@@ -568,79 +591,44 @@ function saveLocal(){
   }catch(e){}
 }
 
-// Persist ONE season's rows to the tables. Upserts what exists locally AND deletes
-// rows the cloud still has but this season no longer does.
-async function pushSeason(s){
-  await sb.from('seasons').upsert({
-    id:s.id, label:s.label, year:s.year, has_laps:!!s.hasLaps,
-    regular_metric:s.regularMetric, playoff_metric:s.playoffMetric,
-    regular_count:s.regularCount, playoff_count:s.playoffCount,
-    playoff_complete:!!s.playoffComplete,
-    sort_order: s.id==='S1'?1:2
+// Serialise a season the way the server function expects.
+function seasonPayload(s){
+  return {
+    id:s.id, label:s.label, year:s.year, hasLaps:!!s.hasLaps,
+    regularMetric:s.regularMetric, playoffMetric:s.playoffMetric,
+    regularCount:s.regularCount, playoffCount:s.playoffCount,
+    playoffComplete:!!s.playoffComplete,
+    cars:(s.cars||[]).map(c=>({num:c.num, team:c.team||'', active:c.active!==false})),
+    teams:(s.teams||[]).map(t=>({name:t.name, color:t.color||null, ...(t.logo?{logo:t.logo}:{})})),
+    races:(s.races||[]).map(r=>({
+      id:r.id, name:r.name, type:r.type, date:r.date||'', phase:r.phase||'regular',
+      entries:r.entries||[],
+      results: r.results ? r.results.map(x=>({num:x.num, start:x.start??null, lap1:x.lap1??null, lap2:x.lap2??null, finish:x.finish})) : null
+    })),
+    fights:(s.fights||[]).map(f=>({winner:f.winner, loser:f.loser, tie:!!f.tie}))
+  };
+}
+
+// One atomic, version-checked season write. expectedVersion null = force overwrite.
+async function rpcPushSeason(s, expectedVersion){
+  const {data, error} = await sb.rpc('hwrs_push_season', {
+    p_expected_version: expectedVersion,
+    p_season: seasonPayload(s),
+    p_drivers: DB_ROOT.drivers || {},
+    p_client: CLIENT_ID
   });
-
-  // season_cars — upsert current, then remove any the cloud still has
-  const carRows = s.cars.map(c=>({season_id:s.id, car_num:c.num, team:c.team||'', active:c.active!==false}));
-  if(carRows.length) await sb.from('season_cars').upsert(carRows);
-  const exCars = await sb.from('season_cars').select('car_num').eq('season_id', s.id);
-  const keepCars = new Set(s.cars.map(c=>c.num));
-  for(const row of (exCars.data||[])){
-    if(!keepCars.has(row.car_num)){
-      await sb.from('season_cars').delete().eq('season_id', s.id).eq('car_num', row.car_num);
-    }
-  }
-
-  // teams — upsert current, then remove any the cloud still has
-  const teamRows = (s.teams||[]).map(t=>({season_id:s.id, name:t.name, color:t.color||null, logo:t.logo||null}));
-  if(teamRows.length) await sb.from('teams').upsert(teamRows);
-  const exTeams = await sb.from('teams').select('name').eq('season_id', s.id);
-  const keepTeams = new Set((s.teams||[]).map(t=>t.name));
-  for(const row of (exTeams.data||[])){
-    if(!keepTeams.has(row.name)){
-      await sb.from('teams').delete().eq('season_id', s.id).eq('name', row.name);
-    }
-  }
-
-  // races — upsert current, then remove any the cloud still has (results cascade)
-  const raceRows = s.races.map((r,i)=>({
-    id:r.id, season_id:s.id, name:r.name, type:r.type, race_date: r.date||null,
-    phase:r.phase||'regular', orig_number:i+1, entries:r.entries||[]
-  }));
-  if(raceRows.length) await sb.from('races').upsert(raceRows);
-  const exRaces = await sb.from('races').select('id').eq('season_id', s.id);
-  const keepRaces = new Set(s.races.map(r=>r.id));
-  for(const row of (exRaces.data||[])){
-    if(!keepRaces.has(row.id)){
-      await sb.from('races').delete().eq('id', row.id);
-    }
-  }
-
-  // results — replace this season's set
-  const raceIds = s.races.map(r=>r.id);
-  if(raceIds.length) await sb.from('results').delete().in('race_id', raceIds);
-  const resRows = [];
-  s.races.forEach(r=>{ if(r.results) r.results.forEach(x=>resRows.push({
-    race_id:r.id, car_num:x.num, start_pos:x.start??null, lap1:x.lap1??null, lap2:x.lap2??null, finish:x.finish
-  })); });
-  if(resRows.length) await sb.from('results').insert(resRows);
-
-  // fights — replace this season's set
-  await sb.from('fights').delete().eq('season_id', s.id);
-  const fightRows = (s.fights||[]).map(f=>({season_id:s.id, winner:f.winner, loser:f.loser, tie:!!f.tie}));
-  if(fightRows.length) await sb.from('fights').insert(fightRows);
+  if(error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  if(!row) throw new Error('empty rpc response');
+  return row;   // {ok, version, updated_at, updated_by}
 }
 
-async function pushDrivers(){
-  const dmap = DB_ROOT.drivers||{};
-  const driverRows = Object.keys(dmap).map(k=>({car_num:k, name:dmap[k]||''}));
-  if(driverRows.length) await sb.from('drivers').upsert(driverRows);
-}
-
-// Normal save path: push only the active season.
+// Normal save path: push only the active season, guarded by the version counter.
 async function pushDB(){
-  saveTimer = null;                 // FIX: must clear, or the realtime guard blocks forever
+  saveTimer = null;                 // must clear, or the realtime guard blocks forever
   if(!sb) return;
-  if(!channelReady){                // FIX: never let a disconnected tab overwrite the cloud
+  if(conflictState) return;         // frozen until the user resolves it
+  if(!channelReady){                // never let a disconnected tab overwrite the cloud
     pendingLocalEdits = true;
     setSyncState('pending');
     return;
@@ -648,8 +636,20 @@ async function pushDB(){
   const s = activeSeasonObj();
   if(!s) return;
   try{
-    await pushDrivers();
-    await pushSeason(s);
+    const row = await rpcPushSeason(s, cloudVersion);
+    if(!row.ok){
+      // Another device wrote after we last synced. Freeze; do not touch the cloud.
+      conflictState = {
+        mine: JSON.parse(JSON.stringify(DB_ROOT)),
+        serverVersion: row.version, at: row.updated_at, by: row.updated_by
+      };
+      pendingLocalEdits = true;
+      setSyncState('conflict');
+      showConflictBanner();
+      return;
+    }
+    cloudVersion = row.version;
+    cloudMeta = {at: row.updated_at, by: row.updated_by};
     pendingLocalEdits = false;
     setSyncState('synced');
   }catch(e){
@@ -660,15 +660,31 @@ async function pushDB(){
   }
 }
 
-// Recovery path: push EVERY season, not just the active one.
-async function pushAllSeasons(){
+// Recovery path: push EVERY season. force=true bypasses the version check.
+async function pushAllSeasons(force){
   if(!sb){ toast('Not connected'); return false; }
   try{
-    await pushDrivers();
-    for(const s of DB_ROOT.seasons) await pushSeason(s);
+    let ver = force ? null : cloudVersion;
+    for(const s of DB_ROOT.seasons){
+      const row = await rpcPushSeason(s, ver);
+      if(!row.ok){
+        conflictState = {
+          mine: JSON.parse(JSON.stringify(DB_ROOT)),
+          serverVersion: row.version, at: row.updated_at, by: row.updated_by
+        };
+        pendingLocalEdits = true;
+        setSyncState('conflict'); showConflictBanner();
+        return false;
+      }
+      ver = row.version;            // chain: each season bumps the counter
+      cloudVersion = row.version;
+      cloudMeta = {at: row.updated_at, by: row.updated_by};
+    }
+    conflictState = null;
     pendingLocalEdits = false;
+    hideConflictBanner();
     setSyncState('synced');
-    toast('All seasons pushed to cloud');
+    toast(force ? 'Cloud overwritten with this device\u2019s copy' : 'All seasons pushed to cloud');
     return true;
   }catch(e){
     console.error(e); toast('Push failed — check connection'); return false;
@@ -684,6 +700,7 @@ async function saveDB(){
 let reloadTimer=null;
 async function reloadNow(){
   if(saveTimer) return;              // a push is genuinely queued right now
+  if(conflictState) return;          // frozen awaiting user decision
   if(pendingLocalEdits) return;      // don't discard unsynced local work
   try{
     applyingRemote = true;
@@ -700,7 +717,7 @@ function subscribeRealtime(){
   if(!sb) return;
   const reload = ()=>{ clearTimeout(reloadTimer); reloadTimer = setTimeout(reloadNow, 300); };
   let ch = sb.channel('hwrs-tables');
-  ['seasons','season_cars','teams','races','results','fights','drivers'].forEach(t=>{
+  ['seasons','season_cars','teams','races','results','fights','drivers','sync_state'].forEach(t=>{
     ch = ch.on('postgres_changes', {event:'*', schema:'public', table:t}, reload);
   });
   ch.subscribe(status=>{
@@ -717,10 +734,73 @@ function subscribeRealtime(){
 // FIX: mobile browsers kill the socket when backgrounded. Re-check on wake.
 function wakeHandlers(){
   document.addEventListener('visibilitychange', ()=>{
-    if(document.visibilityState==='visible' && sb && !pendingLocalEdits) reloadNow();
+    if(document.visibilityState==='visible' && sb) checkVersion();
   });
-  window.addEventListener('online', ()=>{ if(sb && !pendingLocalEdits) reloadNow(); });
+  window.addEventListener('online',  ()=>{ if(sb) checkVersion(); });
   window.addEventListener('offline', ()=>{ channelReady=false; setSyncState('offline'); });
+  window.addEventListener('beforeunload', e=>{
+    if(pendingLocalEdits || conflictState){ e.preventDefault(); e.returnValue=''; }
+  });
+  // Belt and braces: poll the version row every 45s. One tiny read, and it works
+  // even when the realtime socket has silently died on a backgrounded tab.
+  clearInterval(pollTimer);
+  pollTimer = setInterval(()=>{ if(sb && document.visibilityState==='visible') checkVersion(); }, 45000);
+}
+
+// Cheap staleness probe: compare our version against the server's.
+async function checkVersion(){
+  if(!sb || conflictState) return;
+  try{
+    const {data, error} = await sb.from('sync_state').select('*').eq('id',1).maybeSingle();
+    if(error || !data) return;
+    if(cloudVersion === null){ cloudVersion = data.version; cloudMeta={at:data.updated_at,by:data.updated_by}; return; }
+    if(data.version !== cloudVersion){
+      if(pendingLocalEdits){
+        // We are stale AND we have unpushed edits. Freeze rather than guess.
+        conflictState = {mine: JSON.parse(JSON.stringify(DB_ROOT)), serverVersion:data.version, at:data.updated_at, by:data.updated_by};
+        setSyncState('conflict'); showConflictBanner();
+      } else {
+        await reloadNow();          // stale but clean: just take the newer copy
+      }
+    }
+  }catch(e){ /* offline; the dot already says so */ }
+}
+
+/* ---------- conflict banner ---------- */
+function showConflictBanner(){
+  if(document.getElementById('conflictBar')) return;
+  const c = conflictState || {};
+  const when = c.at ? new Date(c.at).toLocaleString() : 'recently';
+  const bar = document.createElement('div');
+  bar.id = 'conflictBar';
+  bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;background:var(--flag);color:#fff;'
+    + 'padding:12px 16px;font-family:var(--semi);font-size:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;'
+    + 'box-shadow:0 -4px 20px rgba(0,0,0,.5)';
+  bar.innerHTML = '<div style="flex:1;min-width:240px"><strong>This tab is out of date.</strong> '
+    + (c.by || 'Another device') + ' saved changes ' + when + '. Your unsaved edits have NOT been sent.</div>'
+    + '<button class="btn" id="cfKeepMine" style="background:#fff;color:var(--flag);border-color:#fff">Use this device’s copy</button>'
+    + '<button class="btn ghost" id="cfTakeTheirs" style="border-color:#fff;color:#fff">Discard mine, load newest</button>'
+    + '<button class="btn ghost" id="cfExport" style="border-color:#fff;color:#fff">Back up mine first</button>';
+  document.body.appendChild(bar);
+  document.getElementById('cfExport').onclick = ()=>{
+    const blob=new Blob([JSON.stringify(conflictState.mine,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download='HWRS_conflict_'+CLIENT_ID+'.json'; a.click(); URL.revokeObjectURL(url);
+  };
+  document.getElementById('cfKeepMine').onclick = async ()=>{
+    if(!confirm('Overwrite the cloud with this device’s copy? Changes made on the other device will be lost.')) return;
+    const mine = conflictState.mine;
+    conflictState = null; DB_ROOT = mine;
+    if(await pushAllSeasons(true)){ hideConflictBanner(); render(); }
+  };
+  document.getElementById('cfTakeTheirs').onclick = async ()=>{
+    if(!confirm('Discard this device’s unsaved changes and load the newest copy?')) return;
+    conflictState = null; pendingLocalEdits = false;
+    hideConflictBanner(); await reloadNow(); toast('Loaded newest copy');
+  };
+}
+function hideConflictBanner(){
+  const b=document.getElementById('conflictBar'); if(b) b.remove();
 }
 
 function setSyncState(state){
@@ -728,15 +808,17 @@ function setSyncState(state){
   if(!el) return;
   if(!CONFIGURED){ el.textContent='● local only'; el.style.color='var(--muted)'; return; }
   clearTimeout(el._t);
+  const stamp = cloudMeta.at ? (' · v'+cloudVersion+' by '+(cloudMeta.by||'?')) : '';
   const map = {
-    live:    ['● live sync on',                        'var(--flag2)'],
-    synced:  ['● synced',                              'var(--flag2)'],
+    live:    ['● live sync on'+stamp,                  'var(--flag2)'],
+    synced:  ['● synced'+stamp,                        'var(--flag2)'],
     offline: ['● offline — changes not saved to cloud','var(--gold)'],
     pending: ['● unsynced local changes — open Data to push','var(--flag)'],
+    conflict:['● OUT OF DATE — another device is newer','var(--flag)'],
   };
   const [text,color] = map[state] || map.offline;
   el.textContent = text; el.style.color = color;
-  if(state==='synced'){ el._t=setTimeout(()=>{ if(channelReady && !pendingLocalEdits) setSyncState('live'); },1800); }
+  if(state==='synced'){ el._t=setTimeout(()=>{ if(channelReady && !pendingLocalEdits && !conflictState) setSyncState('live'); },1800); }
 }
 // back-compat with existing call sites
 function setSyncDot(flash){ setSyncState(flash ? 'synced' : (channelReady ? 'live' : 'offline')); }
@@ -1974,13 +2056,17 @@ function renderData(){
     </div>`;
 
   const scs = document.getElementById('syncCardState');
-  if(scs) scs.textContent = !CONFIGURED ? 'Local only — no cloud configured.'
-    : pendingLocalEdits ? 'You have local changes that are NOT in the cloud. Push them before opening the site elsewhere.'
-    : channelReady ? 'Connected and live.' : 'Disconnected. Changes are saving locally only.';
-  document.getElementById('pushAllBtn').onclick = async ()=>{ if(await pushAllSeasons()) render(); };
+  const stamp = cloudMeta.at ? ('Cloud is at version '+cloudVersion+', last saved by '+(cloudMeta.by||'?')+' on '+new Date(cloudMeta.at).toLocaleString()+'. ') : '';
+  if(scs) scs.innerHTML = !CONFIGURED ? 'Local only — no cloud configured.'
+    : conflictState ? '<strong style="color:var(--flag)">This tab is out of date.</strong> '+stamp+'Resolve the banner at the bottom of the screen.'
+    : pendingLocalEdits ? '<strong style="color:var(--flag)">You have local changes that are NOT in the cloud.</strong> '+stamp
+    : channelReady ? stamp+'Connected and live. This device is '+CLIENT_ID+'.'
+    : 'Disconnected. Changes are saving locally only. '+stamp;
+  document.getElementById('pushAllBtn').onclick = async ()=>{ if(await pushAllSeasons(false)) render(); };
   document.getElementById('pullBtn').onclick = async ()=>{
-    if(pendingLocalEdits && !confirm('You have local changes that were never pushed. Reloading from the cloud will DISCARD them. Continue?')) return;
-    pendingLocalEdits = false; await reloadNow(); toast('Reloaded from cloud');
+    if((pendingLocalEdits||conflictState) && !confirm('You have local changes that were never pushed. Reloading from the cloud will DISCARD them. Continue?')) return;
+    pendingLocalEdits = false; conflictState = null; hideConflictBanner();
+    await reloadNow(); render(); toast('Reloaded from cloud');
   };
   document.getElementById('checkBtn').onclick = ()=>{
     const out=[];
@@ -2016,7 +2102,7 @@ function renderData(){
   document.getElementById('expJson').onclick=()=>{ dl('HWRS_backup.json',JSON.stringify(DB_ROOT,null,2),'application/json'); toast('Full backup downloaded (all seasons)'); };
   document.getElementById('impFile').onchange=e=>{
     const f=e.target.files[0]; if(!f) return;
-    const rd=new FileReader(); rd.onload=async ()=>{ try{ DB_ROOT=migrateToSeasons(JSON.parse(rd.result)); saveLocal(); await pushAllSeasons(); render(); toast('League restored'); }catch(err){ toast('Invalid backup file'); } };
+    const rd=new FileReader(); rd.onload=async ()=>{ try{ DB_ROOT=migrateToSeasons(JSON.parse(rd.result)); saveLocal(); conflictState=null; hideConflictBanner(); await pushAllSeasons(true); render(); toast('League restored'); }catch(err){ toast('Invalid backup file'); } };
     rd.readAsText(f);
   };
   document.getElementById('clearResultsBtn').onclick=()=>{
